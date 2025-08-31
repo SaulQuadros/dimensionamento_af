@@ -174,7 +174,6 @@ with tab3:
 
     if "trechos_df" not in st.session_state:
         cols = ["id","ramo","ordem","rotulo","de_no","para_no","andar","andares_atendidos","material","dn_mm","comp_real_m","leq_m"]
-        import pandas as pd as_pandas  # just to ensure pandas is imported
         st.session_state["trechos_df"] = pd.DataFrame(columns=cols)
     trechos_df = pd.DataFrame(st.session_state["trechos_df"])
 
