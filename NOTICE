@@ -1,0 +1,52 @@
+NOTICE
+======
+
+Project: Dimensionamento de Tubulações de Água Fria — Barrilete e Colunas (Streamlit)
+Copyright (c) 2025 Saul Quadros (and contributors)
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may not use this project except in compliance with the License.
+A copy of the License is provided in the file LICENSE.
+
+This NOTICE file is provided for attribution purposes.
+When redistributing this project in source or binary form, please preserve this file.
+
+Third‑party software and data
+-----------------------------
+This project bundles or depends on third‑party components. They remain
+licensed by their respective authors under their own licenses. Refer to each
+package’s LICENSE for details.
+
+Python packages (runtime):
+- streamlit
+- pandas
+- numpy
+- networkx
+- openpyxl
+- xlsxwriter
+- plotly
+- pydantic
+- reportlab
+
+Data files included in this repository:
+- data/pvc_perda_local_equivalente.csv — Comprimento equivalente (PVC)
+- data/fofo_perda_local_equivalente.csv — Comprimento equivalente (Ferro Fundido)
+- data/uc_nbr5626.csv — Pesos de unidades de consumo (UC) (ajustáveis pelo usuário)
+
+Unless otherwise stated in the README:
+- Source code is licensed under Apache License 2.0.
+- Documentation (README and guides) is licensed under Creative Commons Attribution 4.0 (CC BY 4.0).
+- Example datasets in the `data/` folder are dedicated to the public domain under CC0 1.0.
+
+Attributions
+------------
+If you include additional materials (images, icons, logos, or external datasets),
+please add their credits here with source and license. Example:
+
+- Icon set "XYZ", by <Author>, licensed under <License>.
+- Dataset "ABC 2024", by <Institution>, licensed under <License>.
+
+Acknowledgements
+----------------
+This project uses open-source software. Thanks to the authors and maintainers of
+the libraries listed above.

@@ -1,0 +1,57 @@
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.mypy_cache/
+.pytest_cache/
+.dmypy.json
+.pytype/
+.coverage
+htmlcov/
+
+# --- Virtual envs ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Notebooks / caches ---
+.ipynb_checkpoints/
+.cache/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- IDE ---
+.vscode/
+.idea/
+
+# --- Streamlit secrets (NUNCA commitar) ---
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+.streamlit/*.creds
+
+# --- Relatórios/artefatos gerados ---
+reports/
+*.pdf
+*.xlsx
+
+# --- Dados de entrada (opcional) ---
+# Evite versionar planilhas reais de projetos.
+data/*.xlsx
+data/*.json
+
+# Mantenha apenas os CSVs de referência que acompanham o app:
+!data/pvc_perda_local_equivalente.csv
+!data/fofo_perda_local_equivalente.csv
+!data/uc_nbr5626.csv
