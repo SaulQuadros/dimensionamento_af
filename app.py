@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import json
@@ -24,6 +23,12 @@ pvc_table, fofo_table = load_eqlen_tables()
 pecas_labels = options_for_editor()
 
 BASE_COLS = ['id','ramo','ordem','de_no','para_no','material','dn_mm','comp_real_m','delta_z_m','peso_trecho','leq_m']
+DTYPES = {
+    'id': 'string', 'ramo': 'string', 'ordem': 'Int64',
+    'de_no': 'string', 'para_no': 'string', 'material': 'string',
+    'dn_mm': 'float', 'comp_real_m': 'float', 'delta_z_m': 'float',
+    'peso_trecho': 'float', 'leq_m': 'float'
+}
 
 tab1, tab2, tab3 = st.tabs(['1) Trechos','2) Peças por Trecho','3) Resultados & Exportar'])
 
@@ -32,11 +37,17 @@ with tab1:
     st.subheader('Cadastro de Trechos')
     st.caption('Informe: ramo, ordem, nós, material, DN interno (mm), comprimento real (m), Δz (m) e o **peso** do trecho.')
 
-    # Estado inicial com esquema fixo
+    # Estado inicial com esquema E DTYPE fixos
     if 'trechos' not in st.session_state:
-        st.session_state['trechos'] = pd.DataFrame(columns=BASE_COLS)
+        empty = {c: pd.Series(dtype=t) for c, t in DTYPES.items()}
+        st.session_state['trechos'] = pd.DataFrame(empty)
 
     df = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS)
+    # Garante dtype mesmo após edições
+    try:
+        df = df.astype(DTYPES)
+    except Exception:
+        pass
 
     colcfg = {
         'material': st.column_config.SelectboxColumn(options=['PVC','FoFo'], required=False),
@@ -57,8 +68,14 @@ with tab1:
         key='trechos_editor'
     )
 
-    # Mantém apenas o esquema base e na mesma ordem (evita colunas transitórias como 'label')
-    st.session_state['trechos'] = pd.DataFrame(edited).reindex(columns=BASE_COLS)
+    # Mantém esquema base e dtypes
+    out = pd.DataFrame(edited).reindex(columns=BASE_COLS)
+    for c, t in DTYPES.items():
+        try:
+            out[c] = out[c].astype(t)
+        except Exception:
+            pass
+    st.session_state['trechos'] = out
 
 # ---------------- Tab 2: Peças por trecho ----------------
 with tab2:
@@ -69,7 +86,6 @@ with tab2:
     if tre.empty:
         st.warning('Cadastre trechos na aba 1.')
     else:
-        # label para seleção (não é salvo em session_state)
         tre = tre.copy()
         tre['label'] = tre.apply(lambda r: f"{r.get('ramo','?')}-{int(r.get('ordem') or 0)} [{r.get('de_no','?')}→{r.get('para_no','?')}] id={r.get('id','')}", axis=1)
         sel = st.selectbox('Trecho', tre['label'].tolist())
@@ -94,35 +110,34 @@ with tab2:
         )
         st.session_state['detalhes'][trecho_key] = df_det
 
-        # Calcula L_eq
+        # Calcula L_eq para exibir
         material = (r.get('material') or 'PVC')
         try:
             dn = float(r.get('dn_mm') or 0)
         except Exception:
             dn = 0.0
         eqlen_row = row_for(material, dn, pvc_table, fofo_table)
-
         det_list = [{'tipo': key_from_label(rr['peca']), 'quantidade': rr['quantidade']} for _, rr in df_det.iterrows()]
         L_eq = comprimento_equivalente_total(eqlen_row, det_list)
         st.metric('Comprimento equivalente do trecho (m)', f'{L_eq:.2f}')
 
-        # Grava L_eq no dataframe base, SEM adicionar colunas auxiliares
-        base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
-        # localizar a linha pelo trio (ramo, ordem, de_no->para_no) ou id
-        mask = (
-            (base['id'].astype(str) == str(r.get('id'))) &
-            (base['ramo'].astype(str) == str(r.get('ramo'))) &
-            (pd.to_numeric(base['ordem'], errors='coerce').fillna(-1) == float(r.get('ordem') or 0))
-        )
-        idx = base[mask].index
-        if len(idx) == 0:
-            # fallback pelo display label
-            base['__label__'] = base.apply(lambda x: f"{x.get('ramo','?')}-{int(x.get('ordem') or 0)} [{x.get('de_no','?')}→{x.get('para_no','?')}] id={x.get('id','')}", axis=1)
-            idx = base[base['__label__']==sel].index
-        if len(idx) > 0:
-            base.loc[idx[0], 'leq_m'] = float(L_eq)
-            base = base.reindex(columns=BASE_COLS)
-            st.session_state['trechos'] = base
+        # Só grava L_eq quando o usuário mandar (evita interferir na edição da aba 1)
+        if st.button('Aplicar L_eq ao trecho selecionado', key=f'apply_{trecho_key}'):
+            base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
+            mask = (
+                (base['id'].astype(str) == str(r.get('id'))) &
+                (base['ramo'].astype(str) == str(r.get('ramo'))) &
+                (pd.to_numeric(base['ordem'], errors='coerce').fillna(-1) == float(r.get('ordem') or 0))
+            )
+            idx = base[mask].index
+            if len(idx) == 0:
+                base['__label__'] = base.apply(lambda x: f"{x.get('ramo','?')}-{int(x.get('ordem') or 0)} [{x.get('de_no','?')}→{x.get('para_no','?')}] id={x.get('id','')}", axis=1)
+                idx = base[base['__label__']==sel].index
+            if len(idx) > 0:
+                base.loc[idx[0], 'leq_m'] = float(L_eq)
+                base = base.reindex(columns=BASE_COLS)
+                st.session_state['trechos'] = base
+                st.success('L_eq aplicado ao trecho.')
 
 # ---------------- Tab 3: Resultados & Exportar ----------------
 with tab3:
