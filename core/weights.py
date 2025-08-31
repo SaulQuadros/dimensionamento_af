@@ -1,6 +1,5 @@
 
 import pandas as pd
-import numpy as np
 
 def load_uc_default(csv_path: str) -> pd.DataFrame:
     try:
@@ -27,10 +26,6 @@ def normalize_peso_andar_table(peso_andar_tidy: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def compute_uc_by_floor(peso_andar_tidy: pd.DataFrame, pesos_uc: pd.DataFrame, aptos_por_andar: pd.DataFrame) -> pd.DataFrame:
-    """
-    aptos_por_andar: index = andar (string), columns=['AF1','AF2','AF3','AF4'] (ints)
-    retorna df com index=andar e colunas ['UC_total','Q_l_s']
-    """
     cat = normalize_peso_andar_table(peso_andar_tidy)
     pes = pesos_uc.set_index("aparelho_full")["peso_uc"]
     res_rows = []

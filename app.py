@@ -1,8 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
 
 import streamlit as st
 import pandas as pd
@@ -14,9 +9,33 @@ from core.weights import load_uc_default, build_pesos_uc_from_aparelhos, compute
 from core.losses import hazen_williams_j, perda_localizada
 from core.reports import export_to_excel, export_to_pdf
 
+# Compat: helper to coerce cell contents into list of floors
+import ast, math
+def to_list(x):
+    if isinstance(x, list):
+        return x
+    if x is None:
+        return []
+    if isinstance(x, float):
+        try:
+            if math.isnan(x):
+                return []
+        except Exception:
+            pass
+    if isinstance(x, str):
+        s = x.strip()
+        if not s:
+            return []
+        try:
+            v = ast.literal_eval(s)
+            if isinstance(v, list):
+                return [str(i).strip() for i in v]
+        except Exception:
+            pass
+        return [p.strip() for p in s.split(",") if p.strip()]
+    return []
 
 st.set_page_config(page_title="Dimensionamento Água Fria – Barrilete e Colunas", layout="wide")
-
 st.title("Dimensionamento de Tubulações de Água Fria – Barrilete e Colunas")
 
 with st.sidebar:
@@ -56,7 +75,6 @@ with tab1:
     st.markdown("**UC default (NBR 5626)**")
     uc_default = load_uc_default("data/uc_nbr5626.csv")
     st.dataframe(uc_default, use_container_width=True, height=220)
-    st.caption("Você pode editar este CSV em `data/uc_nbr5626.csv` ou ajustar na aba 2 para cada projeto.")
 
     if up:
         parsed = load_three_sheets(up)
@@ -67,14 +85,12 @@ with tab1:
             st.markdown("**Aparelhos/Peças** (normalizado)")
             st.dataframe(tidy, use_container_width=True, height=260)
 
-            # construir UC por aparelho com base no default
             tidy_cat = tidy.copy()
             tidy_cat["aparelho_full"] = tidy_cat[["aparelho","peca"]].fillna("").agg(lambda x: " - ".join([p for p in x if p]), axis=1).str.strip(" -")
             pesos_uc = build_pesos_uc_from_aparelhos(tidy_cat["aparelho_full"], uc_default)
             st.session_state["pesos_uc"] = pesos_uc.to_dict(orient="list")
             st.session_state["peso_andar_tidy"] = tidy.to_dict(orient="list")
-
-            st.info("UC por aparelho inicializado a partir do CSV default. Ajuste os valores na aba 2 se necessário.")
+            st.info("UC por aparelho inicializado a partir do CSV default.")
         else:
             st.warning("Aba 'Peso_Andar' não encontrada.")
 
@@ -85,7 +101,7 @@ with tab1:
             st.session_state["compr_eq_norm"] = ce.to_dict(orient="list")
         else:
             st.warning("Aba 'Compr_Eq_(AF1)' não encontrada.")
-        # Quadro 3.3 (PVC/FF) – tentativa de leitura
+        # Quadro 3.3 opcional
         if parsed.quadro_33_pvc is not None:
             q33p = normalize_quadro33(parsed.quadro_33_pvc)
             st.markdown("**Quadro 3.3 – PVC (leitura bruta)**")
@@ -96,28 +112,9 @@ with tab1:
             st.markdown("**Quadro 3.3 – Ferro Fundido (leitura bruta)**")
             st.dataframe(q33f.head(100), use_container_width=True, height=200)
             st.session_state["q33_ff"] = q33f.to_dict(orient="list")
-    
 
 with tab2:
     st.subheader("UC por aparelho & Apartamentos por Andar")
-    st.markdown("---")
-    st.markdown("**Salvar/Carregar UC (CSV)**")
-    uc_df = pd.DataFrame(st.session_state.get("pesos_uc", {}))
-    if not uc_df.empty:
-        csv_bytes = uc_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Baixar UC atual (.csv)", data=csv_bytes, file_name="uc_atual.csv", mime="text/csv")
-    up_uc = st.file_uploader("Carregar UC (.csv)", type=["csv"], key="up_uc_csv")
-    if up_uc is not None:
-        try:
-            new_uc = pd.read_csv(up_uc)
-            if set(["aparelho_full","peso_uc"]).issubset(new_uc.columns):
-                st.session_state["pesos_uc"] = new_uc.to_dict(orient="list")
-                st.success("UC carregado e aplicado.")
-            else:
-                st.error("CSV inválido: precisa conter colunas 'aparelho_full' e 'peso_uc'.")
-        except Exception as e:
-            st.error(f"Erro ao ler CSV: {e}")
-    
     pesos_uc = pd.DataFrame(st.session_state.get("pesos_uc", {}))
     if pesos_uc.empty:
         st.info("Carregue primeiro o Excel na aba 1.")
@@ -135,7 +132,6 @@ with tab2:
         apt_tbl_edit = st.data_editor(apt_tbl, use_container_width=True, num_rows="fixed", key="apt_tbl_editor")
         st.session_state["aptos_por_andar"] = apt_tbl_edit
 
-        # Repetir do andar anterior
         colA, colB = st.columns(2)
         if colA.button("Repetir dados do andar anterior (de cima para baixo)"):
             df = pd.DataFrame(st.session_state["aptos_por_andar"]).copy()
@@ -143,7 +139,7 @@ with tab2:
                 df.iloc[i] = df.iloc[i-1]
             st.session_state["aptos_por_andar"] = df
             st.success("Aplicado.")
-        # Calcular UC e Q por andar
+
         tidy = pd.DataFrame(st.session_state.get("peso_andar_tidy", {}))
         if tidy.empty:
             st.warning("Sem tabela de aparelhos/peças normalizada.")
@@ -154,12 +150,31 @@ with tab2:
             st.dataframe(uc_by_floor, use_container_width=True)
             st.session_state["uc_by_floor"] = uc_by_floor.to_dict(orient="index")
 
+        st.markdown("---")
+        st.markdown("**Salvar/Carregar UC (CSV)**")
+        uc_df2 = pd.DataFrame(st.session_state.get("pesos_uc", {}))
+        if not uc_df2.empty:
+            csv_bytes = uc_df2.to_csv(index=False).encode("utf-8")
+            st.download_button("Baixar UC atual (.csv)", data=csv_bytes, file_name="uc_atual.csv", mime="text/csv")
+        up_uc = st.file_uploader("Carregar UC (.csv)", type=["csv"], key="up_uc_csv")
+        if up_uc is not None:
+            try:
+                new_uc = pd.read_csv(up_uc)
+                if set(["aparelho_full","peso_uc"]).issubset(new_uc.columns):
+                    st.session_state["pesos_uc"] = new_uc.to_dict(orient="list")
+                    st.success("UC carregado e aplicado.")
+                else:
+                    st.error("CSV inválido: precisa conter colunas 'aparelho_full' e 'peso_uc'.")
+            except Exception as e:
+                st.error(f"Erro ao ler CSV: {e}")
+
 with tab3:
     st.subheader("Definição de Trechos (ramos, ordem e L_eq)")
-    st.caption("Use 'rotulo' para casar com os rótulos da aba 'Compr_Eq_(AF1)' (ex.: 'E - F'). Informe 'ramo' e 'ordem' para permitir soma de perdas até cada pavimento.")
+    st.caption("Use 'rotulo' para casar com os rótulos da aba 'Compr_Eq_(AF1)' (ex.: 'E - F'). Informe 'ramo' e 'ordem'.")
 
     if "trechos_df" not in st.session_state:
         cols = ["id","ramo","ordem","rotulo","de_no","para_no","andar","andares_atendidos","material","dn_mm","comp_real_m","leq_m"]
+        import pandas as pd as_pandas  # just to ensure pandas is imported
         st.session_state["trechos_df"] = pd.DataFrame(columns=cols)
     trechos_df = pd.DataFrame(st.session_state["trechos_df"])
 
@@ -169,7 +184,7 @@ with tab3:
         use_container_width=True,
         column_config={
             "andar": st.column_config.SelectboxColumn(options=andares, required=False),
-            "andares_atendidos": st.column_config.MultiselectColumn(options=andares_sem_barr, required=False),
+            "andares_atendidos": st.column_config.ListColumn(help="Informe lista de andares (ex.: 6º, 5º, 4º)"),
             "material": st.column_config.SelectboxColumn(options=["PVC","FoFo"], required=False),
         },
         key="trechos_editor"
@@ -195,67 +210,57 @@ with tab4:
         st.info("Cadastre trechos na aba 3 e calcule UC por andar na aba 2.")
     else:
         uc_by_floor = pd.DataFrame.from_dict(uc_idx, orient="index")
-        # vazões por trecho = UC das andares_atendidos convertidos por Q = k·UC^exp
         def uc_sum(lst):
-            if not isinstance(lst, list): return 0.0
-            return float(sum(uc_by_floor.loc[a]["UC_total"] for a in lst if a in uc_by_floor.index))
-
+            return float(sum(uc_by_floor.loc[a]["UC_total"] for a in to_list(lst) if a in uc_by_floor.index))
         trechos = trechos.copy()
         trechos["UC_total_trecho"] = trechos["andares_atendidos"].apply(uc_sum)
         trechos["Q (L/s)"] = trechos["UC_total_trecho"].apply(lambda u: vazao_probavel_from_uc(u, k_uc, exp_uc))
 
-        # DN sugerido por método selecionado
+        # DN selection
         dn_padrao = [20,25,32,40,50,60,75,85,110,125,150,200]
-        def select_dn(q_l_s):
-            # retorna (DN, velocidade)
+        def select_dn(q_l_s, material):
+            if (q_l_s or 0) <= 0: return None, 0.0
             if metodo_dn == "Perda específica (J alvo)":
-                # Escolhe primeiro DN cujo J <= J_alvo (com C do material)
                 best_dn = None; best_v = 0.0
                 for dn in dn_padrao:
                     area = np.pi * (dn/1000.0)**2 / 4.0
-                    v = (q_l_s/1000.0)/area if (q_l_s or 0)>0 else 0.0
-                    Jpvc = hazen_williams_j(q_l_s, dn, c_pvc)
-                    Jff  = hazen_williams_j(q_l_s, dn, c_fofo)
-                    Jref = Jpvc  # usaremos material do trecho abaixo, mas aqui apenas pra ordenar
-                    if Jref <= J_alvo:
+                    v = (q_l_s/1000.0)/area
+                    J = hazen_williams_j(q_l_s, dn, c_pvc if material=="PVC" else c_fofo)
+                    if J <= J_alvo:
                         best_dn, best_v = dn, v
                         break
                 if best_dn is None:
                     best_dn = dn_padrao[-1]
                     area = np.pi * (best_dn/1000.0)**2 / 4.0
-                    best_v = (q_l_s/1000.0)/area if (q_l_s or 0)>0 else 0.0
+                    best_v = (q_l_s/1000.0)/area
                 return best_dn, best_v
-            # Método velocidade (original)
-            if (q_l_s or 0) <= 0: return None, 0.0
-            best = None; best_v = None
-            for dn in dn_padrao:
-                area = np.pi * (dn/1000.0)**2 / 4.0
-                v = (q_l_s/1000.0)/area
-                if v_min <= v <= v_max:
-                    best = dn; best_v = v; break
-            if best is None:
-                # pega o menor DN com v <= v_max, senão o maior
-                candidates = []
+            else:  # Velocidade
+                best = None; best_v = None
                 for dn in dn_padrao:
-                    area = np.pi*(dn/1000.0)**2/4.0
+                    area = np.pi * (dn/1000.0)**2 / 4.0
                     v = (q_l_s/1000.0)/area
-                    if v <= v_max: candidates.append((dn,v))
-                if candidates:
-                    best, best_v = candidates[0]
-                else:
-                    best, best_v = dn_padrao[-1], (q_l_s/1000.0)/(np.pi*(dn_padrao[-1]/1000.0)**2/4.0)
-            return best, best_v
+                    if v_min <= v <= v_max:
+                        best = dn; best_v = v; break
+                if best is None:
+                    candidates = []
+                    for dn in dn_padrao:
+                        area = np.pi*(dn/1000.0)**2/4.0
+                        v = (q_l_s/1000.0)/area
+                        if v <= v_max: candidates.append((dn,v))
+                    if candidates:
+                        best, best_v = candidates[0]
+                    else:
+                        best, best_v = dn_padrao[-1], (q_l_s/1000.0)/(np.pi*(dn_padrao[-1]/1000.0)**2/4.0)
+                return best, best_v
 
         dn_sug, vel = [], []
         for _, r in trechos.iterrows():
-            dn, v = select_dn(r.get("Q (L/s)"))
+            dn, v = select_dn(r.get("Q (L/s)"), r.get("material"))
             dn_sug.append(dn if pd.isna(r.get("dn_mm")) else r.get("dn_mm"))
             vel.append(v)
 
         trechos["DN_sugerido_mm"] = dn_sug
         trechos["velocidade (m/s)"] = vel
-
-        # Hazen-Williams C por material
         def c_hw(material): return c_pvc if material=="PVC" else c_fofo
         trechos["J (m/m)"] = trechos.apply(lambda r: hazen_williams_j(r.get("Q (L/s)"), r.get("DN_sugerido_mm") or r.get("dn_mm"), c_hw(r.get("material"))), axis=1)
         trechos["hf_contínua (mca)"] = (trechos["J (m/m)"] * trechos.get("comp_real_m",0).fillna(0)).astype(float)
@@ -264,41 +269,31 @@ with tab4:
 
         st.markdown("**Tabela de Trechos Calculada**")
         st.dataframe(trechos, use_container_width=True, height=420)
+        st.session_state["trechos_calc"] = trechos.to_dict(orient="list")
 
-        # === Pressões por pavimento ===
         st.markdown("---")
         st.subheader("Pressões por Pavimento")
         col1, col2, col3 = st.columns(3)
-        H_res = col1.number_input("Nível d'água do reservatório sup. (m) [referência: térreo = 0]", value=25.0, step=0.5)
+        H_res = col1.number_input("Nível d'água do reservatório sup. (m) [térreo = 0]", value=25.0, step=0.5)
         delta_h = col2.number_input("Altura entre pavimentos (m)", value=3.0, step=0.1)
         P_req = col3.number_input("Pressão requerida no ponto útil (m.c.a.)", value=5.0, step=0.5)
 
-        # Gera cotas dos andares assumindo térreo = 0, andares acima com +n*delta_h, e ordem fornecida (topo→térreo)
-        cotas = {}
-        # construir mapeamento do topo ao térreo: o último da lista (excluindo Barrilete) é o térreo
         floors = [a for a in andares if a!="Barrilete"]
-        for i, a in enumerate(reversed(floors)):
-            # i = 0 para térreo
-            cotas[a] = i * delta_h
+        cotas = {a: i*delta_h for i,a in enumerate(reversed(floors))}
 
-        st.markdown("**Seleção do trecho final por pavimento (somatório de perdas no ramo até o pavimento)**")
-        # Opção de ramo/ordem: computar acumulado por ramo
         trechos_sorted = trechos.sort_values(by=["ramo","ordem"], na_position="last").copy()
         trechos_sorted["hf_acum_ramo (mca)"] = trechos_sorted.groupby("ramo")["hf_total (mca)"].cumsum()
-        # criar chave de identificação amigável
         trechos_sorted["id_label"] = trechos_sorted.apply(lambda r: f"{r.get('ramo','?')}-{int(r.get('ordem') or 0)} [{r.get('rotulo','')}] id={r.get('id','')}", axis=1)
 
-        # construir seletores por pavimento filtrando trechos que atendem o andar
         escolha = {}
         for a in floors:
-            options = trechos_sorted[trechos_sorted["andares_atendidos"].apply(lambda lst: isinstance(lst,list) and a in lst)]
+            options = trechos_sorted[trechos_sorted["andares_atendidos"].apply(lambda lst: a in to_list(lst))]
             if options.empty:
-                st.warning(f"Não há trechos marcados como atendendo '{a}'. Marque em 'andares_atendidos'.")
+                st.warning(f"Não há trechos marcados como atendendo '{a}'.")
                 continue
             sel = st.selectbox(f"Trecho final para {a}", options["id_label"].tolist(), key=f"sel_{a}")
             escolha[a] = sel
 
-        # montar quadro de pressões
         rows = []
         for a in floors:
             if a not in escolha or a not in cotas: continue
@@ -320,34 +315,11 @@ with tab4:
             st.info("Defina os trechos finais por pavimento para ver o quadro.")
 
 with tab5:
-    st.markdown("---")
-    st.subheader("Relatórios")
-    trechos_df = pd.DataFrame(st.session_state.get("trechos_calc", {}))
-    quadro_df = pd.DataFrame(st.session_state.get("quadro_pressoes", {})).T
-    uc_by_floor = pd.DataFrame.from_dict(st.session_state.get("uc_by_floor", {}), orient="index") if st.session_state.get("uc_by_floor") else pd.DataFrame()
-
-    if trechos_df.empty or quadro_df.empty or uc_by_floor.empty:
-        st.info("Gere os cálculos nas abas anteriores para exportar relatórios.")
-    else:
-        params = {
-            "k_uc": k_uc, "exp_uc": exp_uc, "c_pvc": c_pvc, "c_fofo": c_fofo,
-            "v_min": v_min, "v_max": v_max
-        }
-        # Excel
-        from io import BytesIO
-        bio_xlsx = BytesIO()
-        export_to_excel(bio_xlsx, trechos_df, quadro_df, uc_by_floor, params)
-        st.download_button("Baixar relatório Excel (.xlsx)", data=bio_xlsx.getvalue(), file_name="relatorio_dim_agua_fria.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        # PDF
-        bio_pdf = BytesIO()
-        export_to_pdf(bio_pdf, trechos_df, quadro_df, uc_by_floor, params)
-        st.download_button("Baixar relatório PDF (.pdf)", data=bio_pdf.getvalue(), file_name="relatorio_dim_agua_fria.pdf", mime="application/pdf")
-    
     st.subheader("Exportar/Importar Projeto")
     proj = {
         "projeto_nome": projeto_nome,
         "andares": andares,
-        "parms": {"k_uc": k_uc, "exp_uc": exp_uc, "c_pvc": c_pvc, "c_fofo": c_fofo, "v_min": v_min, "v_max": v_max},
+        "parms": {"k_uc": k_uc, "exp_uc": exp_uc, "c_pvc": c_pvc, "c_fofo": c_fofo, "v_min": v_min, "v_max": v_max, "metodo_dn": metodo_dn, "J_alvo": J_alvo},
         "peso_andar_tidy": st.session_state.get("peso_andar_tidy"),
         "pesos_uc": st.session_state.get("pesos_uc"),
         "aptos_por_andar": st.session_state.get("aptos_por_andar"),
@@ -357,5 +329,18 @@ with tab5:
     }
     j = json.dumps(proj, ensure_ascii=False, indent=2)
     st.download_button("Baixar projeto (.json)", data=j.encode("utf-8"), file_name="projeto_dim_agua_fria.json", mime="application/json")
-    st.write("Para retomar, carregue este JSON e reconstrua as tabelas nas abas correspondentes.")
 
+    st.markdown("---")
+    st.subheader("Relatórios")
+    trechos_df = pd.DataFrame(st.session_state.get("trechos_calc", {}))
+    quadro_df = pd.DataFrame(st.session_state.get("quadro_pressoes", {})).T
+    uc_by_floor = pd.DataFrame.from_dict(st.session_state.get("uc_by_floor", {}), orient="index") if st.session_state.get("uc_by_floor") else pd.DataFrame()
+    if trechos_df.empty or quadro_df.empty or uc_by_floor.empty:
+        st.info("Gere os cálculos nas abas anteriores para exportar relatórios.")
+    else:
+        params = {"k_uc": k_uc, "exp_uc": exp_uc, "c_pvc": c_pvc, "c_fofo": c_fofo, "v_min": v_min, "v_max": v_max, "metodo_dn": metodo_dn, "J_alvo": J_alvo}
+        from io import BytesIO
+        bio_xlsx = BytesIO(); export_to_excel(bio_xlsx, trechos_df, quadro_df, uc_by_floor, params)
+        st.download_button("Baixar relatório Excel (.xlsx)", data=bio_xlsx.getvalue(), file_name="relatorio_dim_agua_fria.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        bio_pdf = BytesIO(); export_to_pdf(bio_pdf, trechos_df, quadro_df, uc_by_floor, params)
+        st.download_button("Baixar relatório PDF (.pdf)", data=bio_pdf.getvalue(), file_name="relatorio_dim_agua_fria.pdf", mime="application/pdf")

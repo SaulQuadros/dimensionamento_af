@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from typing import Dict, List, Tuple, Optional
+from typing import Dict
 import pandas as pd
 
 class ParsedExcel:
@@ -19,21 +19,17 @@ def load_three_sheets(file) -> ParsedExcel:
     return ParsedExcel(raw)
 
 def normalize_peso_andar(df: pd.DataFrame) -> pd.DataFrame:
-    tmp = df.copy()
-    tmp.columns = list(range(tmp.shape[1]))
+    tmp = df.copy(); tmp.columns = list(range(tmp.shape[1]))
     header_row = tmp.index[tmp.apply(lambda r: r.astype(str).str.contains("Apartamento Tipo", na=False).any(), axis=1)]
     start = int(header_row[0]) if len(header_row) else 0
     body = tmp.iloc[start+2:].reset_index(drop=True)
     body = body.rename(columns={1:"aparelho", 3:"peca", 6:"AF1", 7:"AF2", 8:"AF3", 9:"AF4", 10:"area_ad"})
-    keep = ["aparelho","peca","AF1","AF2","AF3","AF4","area_ad"]
-    body = body[keep].copy()
+    keep = ["aparelho","peca","AF1","AF2","AF3","AF4","area_ad"]; body = body[keep].copy()
     body = body[body["aparelho"].notna() | body["peca"].notna()]
     return body.reset_index(drop=True)
 
 def normalize_compr_eq(df: pd.DataFrame) -> pd.DataFrame:
-    tmp = df.copy()
-    tmp.columns = list(range(tmp.shape[1]))
-    # header with labels like 'E - F', 'F - G' assumed in first few rows
+    tmp = df.copy(); tmp.columns = list(range(tmp.shape[1]))
     groups = []
     for c in range(tmp.shape[1]):
         txt = str(tmp.iat[1, c]) if 1 < len(tmp) else ""
@@ -41,32 +37,24 @@ def normalize_compr_eq(df: pd.DataFrame) -> pd.DataFrame:
             groups.append((c, txt.strip()))
     out_rows = []
     for (c0, trecho) in groups:
-        total_col = c0
-        qt_col = c0 + 2
-        dn_row_guess = 3
+        total_col = c0; qt_col = c0 + 2; dn_row_guess = 3
         for r in range(5, tmp.shape[0]):
             total = tmp.iat[r, total_col] if total_col < tmp.shape[1] else None
             qt = tmp.iat[r, qt_col] if qt_col < tmp.shape[1] else None
             dn = tmp.iat[dn_row_guess, c0] if dn_row_guess < tmp.shape[0] else None
-            if pd.isna(total) and pd.isna(qt):
-                continue
-            try:
-                total_f = float(total)
+            if pd.isna(total) and pd.isna(qt): continue
+            try: total_f = float(total)
             except: total_f = None
-            try:
-                qt_f = float(qt)
+            try: qt_f = float(qt)
             except: qt_f = None
-            try:
-                dn_f = float(dn)
+            try: dn_f = float(dn)
             except: dn_f = None
-            if total_f is None and qt_f is None:
-                continue
+            if total_f is None and qt_f is None: continue
             out_rows.append({"trecho": trecho, "dn_mm": dn_f, "quantidade": qt_f, "total_m": total_f})
     return pd.DataFrame(out_rows)
 
 def normalize_exerc(df: pd.DataFrame) -> pd.DataFrame:
-    tmp = df.copy()
-    tmp.columns = list(range(tmp.shape[1]))
+    tmp = df.copy(); tmp.columns = list(range(tmp.shape[1]))
     body = tmp[[0, 16, 17, 18]].dropna(how="all")
     body.columns = ["andar","col16","press_disp_kpa","press_req_kpa"]
     mask = body["andar"].astype(str).str.contains("o|Barrilete|Térreo|Subsolo", case=False, na=False)
@@ -74,14 +62,8 @@ def normalize_exerc(df: pd.DataFrame) -> pd.DataFrame:
     return body
 
 def normalize_quadro33(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Heurística simples: tenta encontrar uma grade de Q x DN ou perda específica x DN.
-    Como a diagramação costuma ser complexa, retornamos linhas com números detectados e deixamos o app avisar caso falhe.
-    """
-    if df is None or df.empty:
-        return pd.DataFrame()
-    tmp = df.copy()
-    tmp.columns = list(range(tmp.shape[1]))
+    if df is None or df.empty: return pd.DataFrame()
+    tmp = df.copy(); tmp.columns = list(range(tmp.shape[1]))
     rows = []
     for r in range(tmp.shape[0]):
         for c in range(tmp.shape[1]):
