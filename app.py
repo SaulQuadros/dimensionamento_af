@@ -35,6 +35,39 @@ def to_list(x):
         return [p.strip() for p in s.split(",") if p.strip()]
     return []
 
+
+# ---- JSON safety helpers ----
+def to_jsonable(obj):
+    import numpy as _np
+    import pandas as _pd
+    # None and primitives
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        # numpy scalar
+        if isinstance(obj, _np.generic):
+            return obj.item()
+        return obj
+    # pandas
+    if isinstance(obj, _pd.DataFrame):
+        return obj.to_dict(orient="list")
+    if isinstance(obj, _pd.Series):
+        return obj.tolist()
+    # numpy arrays
+    if isinstance(obj, _np.ndarray):
+        return obj.tolist()
+    # dict / list / tuple / set
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [to_jsonable(v) for v in obj]
+    # try numpy .item()
+    try:
+        return obj.item()
+    except Exception:
+        # fallback to string
+        try:
+            return str(obj)
+        except Exception:
+            return None
 st.set_page_config(page_title="Dimensionamento Água Fria – Barrilete e Colunas", layout="wide")
 st.title("Dimensionamento de Tubulações de Água Fria – Barrilete e Colunas")
 
@@ -326,7 +359,8 @@ with tab5:
         "trechos": st.session_state.get("trechos_df"),
         "quadro_pressoes": st.session_state.get("quadro_pressoes"),
     }
-    j = json.dumps(proj, ensure_ascii=False, indent=2)
+    safe_proj = to_jsonable(proj)
+    j = json.dumps(safe_proj, ensure_ascii=False, indent=2)
     st.download_button("Baixar projeto (.json)", data=j.encode("utf-8"), file_name="projeto_dim_agua_fria.json", mime="application/json")
 
     st.markdown("---")
