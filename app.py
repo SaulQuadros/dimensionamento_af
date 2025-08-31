@@ -6,8 +6,37 @@ from core.losses import hazen_williams_j, comprimento_equivalente_total
 from core.tables import load_eqlen_tables, options_for_editor, key_from_label, row_for
 from core.reports import export_to_excel, export_to_pdf
 
-st.set_page_config(page_title='SPAF – Simplificado', layout='wide')
-st.title('Dimensionamento de Tubulações de Água Fria — Barrilete e Colunas (Simplificado)')
+st.set_page_config(page_title='SPAF – Simplificado (Formulário)', layout='wide')
+st.title('Dimensionamento de Tubulações de Água Fria — Barrilete e Colunas (Modo Formulário)')
+
+# ---------------- Helpers ----------------
+BASE_COLS = ['id','ramo','ordem','de_no','para_no','material','dn_mm','comp_real_m','delta_z_m','peso_trecho','leq_m']
+DTYPES = {
+    'id': 'string', 'ramo': 'string', 'ordem': 'Int64',
+    'de_no': 'string', 'para_no': 'string', 'material': 'string',
+    'dn_mm': 'float', 'comp_real_m': 'float', 'delta_z_m': 'float',
+    'peso_trecho': 'float', 'leq_m': 'float'
+}
+def _s(x):
+    try:
+        if pd.isna(x): return ''
+    except Exception:
+        pass
+    return '' if x is None else str(x)
+def _num(x, default=0.0):
+    try:
+        if pd.isna(x): return default
+    except Exception:
+        pass
+    try:
+        return float(str(x).replace(',', '.'))
+    except Exception:
+        return default
+def _i(x, default=0):
+    try:
+        return int(_num(x, default))
+    except Exception:
+        return default
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -22,104 +51,99 @@ with st.sidebar:
 pvc_table, fofo_table = load_eqlen_tables()
 pecas_labels = options_for_editor()
 
-BASE_COLS = ['id','ramo','ordem','de_no','para_no','material','dn_mm','comp_real_m','delta_z_m','peso_trecho','leq_m']
-DTYPES = {
-    'id': 'string', 'ramo': 'string', 'ordem': 'Int64',
-    'de_no': 'string', 'para_no': 'string', 'material': 'string',
-    'dn_mm': 'float', 'comp_real_m': 'float', 'delta_z_m': 'float',
-    'peso_trecho': 'float', 'leq_m': 'float'
-}
+tab1, tab2, tab3 = st.tabs(['1) Trechos (Formulário)','2) Peças por Trecho','3) Resultados & Exportar'])
 
-def _num(x, default=0.0):
-    """Safe numeric (accepts comma) returning float."""
-    try:
-        if pd.isna(x): return default
-    except Exception:
-        pass
-    try:
-        return float(str(x).replace(',', '.'))
-    except Exception:
-        return default
+# ---------------- Session state init ----------------
+if 'trechos' not in st.session_state:
+    empty = {c: pd.Series(dtype=t) for c, t in DTYPES.items()}
+    st.session_state['trechos'] = pd.DataFrame(empty)
+if 'detalhes' not in st.session_state:
+    st.session_state['detalhes'] = {}
 
-def _s(x):
-    try:
-        if pd.isna(x): return ''
-    except Exception:
-        pass
-    return '' if x is None else str(x)
-
-def _i(x, default=0):
-    """Safe int via _num."""
-    try:
-        return int(_num(x, default))
-    except Exception:
-        return default
-
-tab1, tab2, tab3 = st.tabs(['1) Trechos','2) Peças por Trecho','3) Resultados & Exportar'])
-
-# ---------------- Tab 1: Trechos ----------------
+# ---------------- Tab 1: Trechos (Form) ----------------
 with tab1:
-    st.subheader('Cadastro de Trechos')
-    st.caption('Informe: ramo, ordem, nós, material, DN interno (mm), comprimento real (m), Δz (m) e o **peso** do trecho.')
+    st.subheader('Cadastro de Trechos — por Formulário')
+    st.caption('Preencha todos os campos do trecho e clique **Adicionar trecho**. Sem edição inline para evitar perda de dados na primeira digitação.')
 
-    # Estado inicial com esquema E DTYPE fixos
-    if 'trechos' not in st.session_state:
-        empty = {c: pd.Series(dtype=t) for c, t in DTYPES.items()}
-        st.session_state['trechos'] = pd.DataFrame(empty)
+    with st.form('form_add_trecho', clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns([1.2,1,1,1])
+        with c1:
+            id_val = st.text_input('id (opcional)')
+        with c2:
+            ramo = st.text_input('ramo', value='A')
+        with c3:
+            ordem = st.number_input('ordem', min_value=1, step=1, value=1)
+        with c4:
+            material = st.selectbox('material', ['PVC','FoFo'], index=0)
 
-    df = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS)
-    # Garante dtype mesmo após edições
-    try:
-        df = df.astype(DTYPES)
-    except Exception:
-        pass
+        c5, c6, c7 = st.columns(3)
+        with c5:
+            de_no = st.text_input('de_no', value='RS')
+        with c6:
+            para_no = st.text_input('para_no', value='T1')
+        with c7:
+            dn_mm = st.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
 
-    colcfg = {
-        'material': st.column_config.SelectboxColumn(options=['PVC','FoFo'], required=False),
-        'ordem': st.column_config.NumberColumn(min_value=1, step=1, format='%d'),
-        'dn_mm': st.column_config.NumberColumn(min_value=0, step=1, format='%.0f'),
-        'comp_real_m': st.column_config.NumberColumn(min_value=0.0, step=0.1, format='%.2f'),
-        'delta_z_m': st.column_config.NumberColumn(step=0.1, format='%.2f'),
-        'peso_trecho': st.column_config.NumberColumn(min_value=0.0, step=1.0, format='%.2f'),
-        'leq_m': st.column_config.NumberColumn(step=0.1, format='%.2f', disabled=True),
-    }
+        c8, c9, c10 = st.columns(3)
+        with c8:
+            comp_real_m = st.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
+        with c9:
+            delta_z_m = st.number_input('delta_z_m (m)', step=0.1, value=0.0, format='%.2f', help='Positivo quando sobe; negativo quando desce.')
+        with c10:
+            peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
 
-    edited = st.data_editor(
-        df,
-        num_rows='dynamic',
-        use_container_width=True,
-        hide_index=True,
-        column_config=colcfg,
-        key='trechos_editor'
-    )
+        add_ok = st.form_submit_button('➕ Adicionar trecho')
 
-    # Mantém esquema base e dtypes
-    out = pd.DataFrame(edited).reindex(columns=BASE_COLS)
-    for c, t in DTYPES.items():
-        try:
-            out[c] = out[c].astype(t)
-        except Exception:
-            pass
-    st.session_state['trechos'] = out
+    if add_ok:
+        base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
+        nova = {
+            'id': id_val, 'ramo': ramo, 'ordem': int(ordem),
+            'de_no': de_no, 'para_no': para_no, 'material': material,
+            'dn_mm': float(dn_mm), 'comp_real_m': float(comp_real_m), 'delta_z_m': float(delta_z_m),
+            'peso_trecho': float(peso_trecho), 'leq_m': 0.0
+        }
+        base = pd.concat([base, pd.DataFrame([nova])], ignore_index=True)
+        # enforce dtypes
+        for c, t in DTYPES.items():
+            try: base[c] = base[c].astype(t)
+            except Exception: pass
+        st.session_state['trechos'] = base
+        st.success('Trecho adicionado!')
+
+    # Visualização (somente leitura)
+    vis = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
+    if not vis.empty:
+        vis_show = vis.copy()
+        st.dataframe(vis_show, use_container_width=True, height=360)
+        # Excluir linha
+        vis['_label'] = vis.apply(lambda r: f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}", axis=1)
+        col_del1, col_del2 = st.columns([3,1])
+        with col_del1:
+            to_del = st.selectbox('Excluir trecho (opcional): selecione', ['(nenhum)'] + vis['_label'].tolist())
+        with col_del2:
+            if st.button('🗑️ Excluir selecionado', use_container_width=True) and to_del != '(nenhum)':
+                idx = vis[vis['_label']==to_del].index
+                if len(idx)>0:
+                    base = pd.DataFrame(st.session_state['trechos']).copy()
+                    base = base.drop(index=idx[0]).reset_index(drop=True)
+                    st.session_state['trechos'] = base
+                    st.success('Trecho excluído.')
 
 # ---------------- Tab 2: Peças por trecho ----------------
 with tab2:
     st.subheader('Peças/Acessórios por Trecho (L_eq)')
-    st.caption('Selecione um trecho e informe **somente as quantidades**. O app calcula L_eq pelo **material** e **DN** do trecho.')
+    st.caption('Selecione um trecho e informe **somente as quantidades**. Clique **Aplicar L_eq** para gravar no trecho.')
 
     tre = pd.DataFrame(st.session_state.get('trechos', {})).reindex(columns=BASE_COLS)
     if tre.empty:
         st.warning('Cadastre trechos na aba 1.')
     else:
-        # label para seleção (não é salvo em session_state), com conversões seguras
         tre = tre.copy()
         tre['label'] = tre.apply(lambda r: f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}", axis=1)
         sel = st.selectbox('Trecho', tre['label'].tolist())
         r = tre[tre['label']==sel].iloc[0]
         trecho_key = str(_s(r.get('id')) or f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))}")
 
-        if 'detalhes' not in st.session_state:
-            st.session_state['detalhes'] = {}
         if trecho_key not in st.session_state['detalhes']:
             st.session_state['detalhes'][trecho_key] = pd.DataFrame({'peca':[pecas_labels[0]], 'quantidade':[0]})
 
@@ -136,7 +160,6 @@ with tab2:
         )
         st.session_state['detalhes'][trecho_key] = df_det
 
-        # Calcula L_eq para exibir
         material = (_s(r.get('material')) or 'PVC')
         dn = _num(r.get('dn_mm'), 0.0)
         eqlen_row = row_for(material, dn, pvc_table, fofo_table)
@@ -144,21 +167,16 @@ with tab2:
         L_eq = comprimento_equivalente_total(eqlen_row, det_list)
         st.metric('Comprimento equivalente do trecho (m)', f'{L_eq:.2f}')
 
-        # Só grava L_eq quando o usuário mandar (evita interferir na edição da aba 1)
         if st.button('Aplicar L_eq ao trecho selecionado', key=f'apply_{trecho_key}'):
             base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
-            mask = (
-                (base['id'].astype(str) == _s(r.get('id'))) &
-                (base['ramo'].astype(str) == _s(r.get('ramo'))) &
-                (pd.to_numeric(base['ordem'], errors='coerce').fillna(-1) == float(_i(r.get('ordem'))))
-            )
-            idx = base[mask].index
-            if len(idx) == 0:
-                base['__label__'] = base.apply(lambda x: f"{_s(x.get('ramo'))}-{_i(x.get('ordem'))} [{_s(x.get('de_no'))}→{_s(x.get('para_no'))}] id={_s(x.get('id'))}", axis=1)
-                idx = base[base['__label__']==sel].index
-            if len(idx) > 0:
+            base['label'] = base.apply(lambda x: f"{_s(x.get('ramo'))}-{_i(x.get('ordem'))} [{_s(x.get('de_no'))}→{_s(x.get('para_no'))}] id={_s(x.get('id'))}", axis=1)
+            idx = base[base['label']==sel].index
+            if len(idx)>0:
                 base.loc[idx[0], 'leq_m'] = float(L_eq)
-                base = base.reindex(columns=BASE_COLS)
+                base = base.drop(columns=['label']).reindex(columns=BASE_COLS)
+                for c, t in DTYPES.items():
+                    try: base[c] = base[c].astype(t)
+                    except Exception: pass
                 st.session_state['trechos'] = base
                 st.success('L_eq aplicado ao trecho.')
 
