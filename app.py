@@ -5,7 +5,6 @@
 
 
 import streamlit as st
-st.sidebar.caption(f"Streamlit {st.__version__}")
 import pandas as pd
 import numpy as np
 import json
