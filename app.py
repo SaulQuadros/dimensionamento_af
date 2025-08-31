@@ -5,6 +5,7 @@
 
 
 import streamlit as st
+st.sidebar.caption(f"Streamlit {st.__version__}")
 import pandas as pd
 import numpy as np
 import json
@@ -14,7 +15,6 @@ from core.weights import load_uc_default, build_pesos_uc_from_aparelhos, compute
 from core.losses import hazen_williams_j, perda_localizada
 from core.reports import export_to_excel, export_to_pdf
 
-st.sidebar.caption(f"Streamlit {st.__version__}")
 
 st.set_page_config(page_title="Dimensionamento Água Fria – Barrilete e Colunas", layout="wide")
 
