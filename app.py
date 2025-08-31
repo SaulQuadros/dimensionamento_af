@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[ ]:
+
 
 import streamlit as st
 import pandas as pd
@@ -8,6 +13,8 @@ from core.excel_parser import load_three_sheets, normalize_peso_andar, normalize
 from core.weights import load_uc_default, build_pesos_uc_from_aparelhos, compute_uc_by_floor, vazao_probavel_from_uc
 from core.losses import hazen_williams_j, perda_localizada
 from core.reports import export_to_excel, export_to_pdf
+
+st.sidebar.caption(f"Streamlit {st.__version__}")
 
 st.set_page_config(page_title="Dimensionamento Água Fria – Barrilete e Colunas", layout="wide")
 
@@ -352,3 +359,4 @@ with tab5:
     j = json.dumps(proj, ensure_ascii=False, indent=2)
     st.download_button("Baixar projeto (.json)", data=j.encode("utf-8"), file_name="projeto_dim_agua_fria.json", mime="application/json")
     st.write("Para retomar, carregue este JSON e reconstrua as tabelas nas abas correspondentes.")
+
