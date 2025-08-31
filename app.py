@@ -30,6 +30,31 @@ DTYPES = {
     'peso_trecho': 'float', 'leq_m': 'float'
 }
 
+def _num(x, default=0.0):
+    """Safe numeric (accepts comma) returning float."""
+    try:
+        if pd.isna(x): return default
+    except Exception:
+        pass
+    try:
+        return float(str(x).replace(',', '.'))
+    except Exception:
+        return default
+
+def _s(x):
+    try:
+        if pd.isna(x): return ''
+    except Exception:
+        pass
+    return '' if x is None else str(x)
+
+def _i(x, default=0):
+    """Safe int via _num."""
+    try:
+        return int(_num(x, default))
+    except Exception:
+        return default
+
 tab1, tab2, tab3 = st.tabs(['1) Trechos','2) Peças por Trecho','3) Resultados & Exportar'])
 
 # ---------------- Tab 1: Trechos ----------------
@@ -86,11 +111,12 @@ with tab2:
     if tre.empty:
         st.warning('Cadastre trechos na aba 1.')
     else:
+        # label para seleção (não é salvo em session_state), com conversões seguras
         tre = tre.copy()
-        tre['label'] = tre.apply(lambda r: f"{r.get('ramo','?')}-{int(r.get('ordem') or 0)} [{r.get('de_no','?')}→{r.get('para_no','?')}] id={r.get('id','')}", axis=1)
+        tre['label'] = tre.apply(lambda r: f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}", axis=1)
         sel = st.selectbox('Trecho', tre['label'].tolist())
         r = tre[tre['label']==sel].iloc[0]
-        trecho_key = str(r.get('id') or f"{r.get('ramo')}-{r.get('ordem')}")
+        trecho_key = str(_s(r.get('id')) or f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))}")
 
         if 'detalhes' not in st.session_state:
             st.session_state['detalhes'] = {}
@@ -111,11 +137,8 @@ with tab2:
         st.session_state['detalhes'][trecho_key] = df_det
 
         # Calcula L_eq para exibir
-        material = (r.get('material') or 'PVC')
-        try:
-            dn = float(r.get('dn_mm') or 0)
-        except Exception:
-            dn = 0.0
+        material = (_s(r.get('material')) or 'PVC')
+        dn = _num(r.get('dn_mm'), 0.0)
         eqlen_row = row_for(material, dn, pvc_table, fofo_table)
         det_list = [{'tipo': key_from_label(rr['peca']), 'quantidade': rr['quantidade']} for _, rr in df_det.iterrows()]
         L_eq = comprimento_equivalente_total(eqlen_row, det_list)
@@ -125,13 +148,13 @@ with tab2:
         if st.button('Aplicar L_eq ao trecho selecionado', key=f'apply_{trecho_key}'):
             base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
             mask = (
-                (base['id'].astype(str) == str(r.get('id'))) &
-                (base['ramo'].astype(str) == str(r.get('ramo'))) &
-                (pd.to_numeric(base['ordem'], errors='coerce').fillna(-1) == float(r.get('ordem') or 0))
+                (base['id'].astype(str) == _s(r.get('id'))) &
+                (base['ramo'].astype(str) == _s(r.get('ramo'))) &
+                (pd.to_numeric(base['ordem'], errors='coerce').fillna(-1) == float(_i(r.get('ordem'))))
             )
             idx = base[mask].index
             if len(idx) == 0:
-                base['__label__'] = base.apply(lambda x: f"{x.get('ramo','?')}-{int(x.get('ordem') or 0)} [{x.get('de_no','?')}→{x.get('para_no','?')}] id={x.get('id','')}", axis=1)
+                base['__label__'] = base.apply(lambda x: f"{_s(x.get('ramo'))}-{_i(x.get('ordem'))} [{_s(x.get('de_no'))}→{_s(x.get('para_no'))}] id={_s(x.get('id'))}", axis=1)
                 idx = base[base['__label__']==sel].index
             if len(idx) > 0:
                 base.loc[idx[0], 'leq_m'] = float(L_eq)
