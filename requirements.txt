@@ -1,9 +1,6 @@
 streamlit>=1.24
 pandas>=2.0
 numpy>=1.26
-networkx>=3.2
 openpyxl>=3.1
 xlsxwriter>=3.2
-plotly>=5.22
-pydantic>=2.8
 reportlab>=4.0
