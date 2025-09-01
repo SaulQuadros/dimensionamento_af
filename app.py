@@ -1,18 +1,6 @@
 
 import streamlit as st
 import pandas as pd
-import unicodedata
-
-def _material_key(x: str) -> str:
-    # normalize accents and case
-    if not isinstance(x, str):
-        return 'PVC'
-    y = ''.join(c for c in unicodedata.normalize('NFKD', x) if not unicodedata.combining(c)).lower().strip()
-    # common aliases
-    if 'fofo' in y or 'ferro' in y or 'fundido' in y:
-        return 'FoFo'
-    return 'PVC'
-
 import json
 from pathlib import Path
 
@@ -45,36 +33,10 @@ def trecho_label(r):
     return f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}"
 
 # ----------------- Tables -----------------
-
-def _read_eq_csv(path: str) -> pd.DataFrame:
-    # Robust reader for PVC/FoFo L_eq tables
-    try:
-        df = pd.read_csv(path)
-        if df.shape[1] > 1:
-            pass
-        else:
-            df = pd.read_csv(path, sep=';')
-    except Exception:
-        df = pd.read_csv(path, sep=None, engine='python')
-    # Normalize headers
-    df.columns = [c.strip() for c in df.columns]
-    # Normalize values
-    if 'de_mm' in df.columns:
-        df['de_mm'] = pd.to_numeric(df['de_mm'], errors='coerce')
-    if 'dref_pol' in df.columns:
-        df['dref_pol'] = df['dref_pol'].astype(str)
-    for c in df.columns:
-        if c not in ('de_mm','dref_pol'):
-            s = df[c].astype(str).str.replace(',', '.', regex=False).str.replace('−','-', regex=False)
-            df[c] = pd.to_numeric(s, errors='coerce')
-    if 'de_mm' in df.columns:
-        df = df.sort_values('de_mm').reset_index(drop=True)
-    return df
-
-
 def load_tables():
-    pvc = _read_eq_csv('data/pvc_pl_eqlen.csv')
-    fofo = _read_eq_csv('data/fofo_pl_eqlen.csv')
+    base = Path(__file__).parent
+    pvc = pd.read_csv(base / 'data/pvc_pl_eqlen.csv')
+    fofo = pd.read_csv(base / 'data/fofo_pl_eqlen.csv')
     return pvc, fofo
 
 def get_dn_series(table):
@@ -114,7 +76,6 @@ def pretty(col):
     return lbl
 
 # ----------------- Headloss models -----------------
-
 def j_fair_whipple_hsiao_kPa_per_m(Q_Ls, D_mm, material: str):
     Q = max(0.0, _num(Q_Ls, 0.0))
     D = max(0.0, _num(D_mm, 0.0))
@@ -192,15 +153,73 @@ with tab1:
         c6,c7,c8 = st.columns(3)
         dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
-        dz_io_m = c8.number_input('dz_io_m (m) [z_inicial - z_final]', step=0.1, value=0.0, format='%.2f')
+        dz_io_m = c8.number_input("dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)", step=0.1, value=0.0, format='%.2f')', step=0.1, value=0.0, format='%.2f')
         peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
         c9,c10 = st.columns([1,1])
         tipo_ponto = c9.selectbox('Tipo do ponto no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
-        pmin_default = 5.0 if 'Sem utilização' in tipo_ponto else 10.0
-        p_min_ref_kPa = c10.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5, value=pmin_default, format='%.2f')
-        ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)'))
+        p_min_ref_kPa = c10.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5, value=(5.0 if 'Sem' in tipo_ponto else 10.0), format='%.2f')
+        ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)
+    # ============================
+    # Painel de gerenciamento de trechos (excluir / mover)
+    # ============================
+    st.subheader('Gerenciar trechos')
+    if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.DataFrame) and not st.session_state['trechos'].empty:
+        tman = st.session_state['trechos'].copy()
+        if 'ramo' in tman.columns and 'ordem' in tman.columns:
+            tman = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+        else:
+            tman = tman.reset_index(drop=True)
+        r_opt = ['Todos'] + (sorted([str(x) for x in tman['ramo'].dropna().unique().tolist()]) if 'ramo' in tman.columns else [])
+        ramo_sel = st.selectbox('Filtrar por ramo', r_opt or ['Todos'], key='manage_ramo_sel')
+        if ramo_sel != 'Todos' and 'ramo' in tman.columns:
+            tview = tman[tman['ramo'].astype(str)==ramo_sel].reset_index(drop=True)
+        else:
+            tview = tman.copy()
+        st.write('Clique para **excluir** ou **mover** o trecho na ordem. As alterações são imediatas e afetam as demais abas.')
+        for idx in tview.index:
+            r = tview.loc[idx]
+            cols = st.columns([2,2,2,2,8])
+            with cols[4]:
+                st.write(f\"**{r.get('ramo','?')}-{r.get('ordem','?')}**  [{r.get('de_no','?')} → {r.get('para_no','?')}]  DN={r.get('dn_mm','?')} mm  L={r.get('comp_real_m','?')} m\")
+            with cols[0]:
+                if st.button('🗑️ Excluir', key=f\"del_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}\"):
+                    mask = (tman['ramo'].astype(str)==str(r.get('ramo'))) & (tman['ordem']==r.get('ordem')) & (tman['de_no']==r.get('de_no')) & (tman['para_no']==r.get('para_no'))
+                    t_new = tman.loc[~mask].copy().reset_index(drop=True)
+                    if all(c in t_new.columns for c in ['ramo','ordem']):
+                        t_new['ordem'] = t_new.groupby('ramo').cumcount()+1
+                    st.session_state['trechos'] = t_new
+                    st.experimental_rerun()
+            with cols[1]:
+                if st.button('⬆️ Subir', key=f\"up_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}\"):
+                    if all(c in tman.columns for c in ['ramo','ordem']):
+                        ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
+                        if ordem_v > 1:
+                            i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
+                            i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v-1)
+                            tman.loc[i1,'ordem'] = ordem_v-1
+                            tman.loc[i2,'ordem'] = ordem_v
+                            t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+                            st.session_state['trechos'] = t_new
+                            st.experimental_rerun()
+            with cols[2]:
+                if st.button('⬇️ Descer', key=f\"down_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}\"):
+                    if all(c in tman.columns for c in ['ramo','ordem']):
+                        ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
+                        max_ord = int(tman.loc[tman['ramo']==ramo_v, 'ordem'].max())
+                        if ordem_v < max_ord:
+                            i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
+                            i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v+1)
+                            tman.loc[i1,'ordem'] = ordem_v+1
+                            tman.loc[i2,'ordem'] = ordem_v
+                            t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+                            st.session_state['trechos'] = t_new
+                            st.experimental_rerun()
+            with cols[3]:
+                pass
+    else:
+        st.info('Nenhum trecho cadastrado ainda.')'))'))
     if ok:
-        mat_key = _material_key(material_sistema)
+        mat_key = 'FoFo' if isinstance(material_sistema,str) and material_sistema.strip().lower()=='fofo' else 'PVC'
         table_mat = pvc_table if mat_key=='PVC' else fofo_table
         st.caption(f'Tabela L_eq em uso: **{mat_key}**')
         _row, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
@@ -227,7 +246,7 @@ with tab2:
     elif material_sistema == '(selecione)':
         st.warning('Selecione o Material do Sistema na barra lateral.')
     else:
-        mat_key = _material_key(material_sistema)
+        mat_key = 'FoFo' if isinstance(material_sistema,str) and material_sistema.strip().lower()=='fofo' else 'PVC'
         table_mat = pvc_table if mat_key=='PVC' else fofo_table
         st.caption(f'Tabela L_eq em uso: **{mat_key}**')
         piece_cols, dn_name = piece_columns_for(table_mat)
@@ -264,7 +283,7 @@ with tab2:
                 st.success(f'L_eq aplicado ao trecho {sel}: {L:.2f} m')
             st.metric('L_eq do trecho (m)', f'{L:.2f}')
 
-# TAB 3 — resultados (kPa) com J em kPa/m e propagação p_in -> p_out
+# TAB 3 — resultados (kPa) com J em kPa/m e propagação P_in -> P_out
 with tab3:
     st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no ponto A')
     st.caption('Fórmula: **p_out = p_in + γ·(z_i − z_f) − h_f^cont − h_f^loc**; γ = 9,80665 kPa/m')
@@ -275,8 +294,15 @@ with tab3:
         t3 = t3.copy()
         # Q provável (L/s)
         t3['Q (L/s)'] = _num(0, 0) + (k_uc * (t3['peso_trecho'] ** exp_uc))
-        # Gradiente J (kPa/m)
-        def _J_kPa(rr):
+
+        # Gradiente J (m/m) e em kPa/m
+        def J_m(rr):
+            if modelo_perda == 'Hazen-Williams':
+                C = c_pvc if material_sistema=='PVC' else c_fofo
+                return j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
+            else:
+                return j_fair_whipple_hsiao(rr['Q (L/s)'], rr['dn_mm'])
+                def _J_kPa(rr):
             if modelo_perda == 'Hazen-Williams':
                 C = c_pvc if material_sistema=='PVC' else c_fofo
                 j_mm = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
@@ -290,7 +316,7 @@ with tab3:
             Q = max(0.0, _num(rr['Q (L/s)'],0.0)) / 1000.0
             D = max(0.0, _num(rr['dn_mm'],0.0)) / 1000.0
             if D <= 0 or Q <= 0: return 0.0
-            A = math.pi * D*D / 4.0
+            A = math.pi * (D**2) / 4.0
             return Q / A
         t3['v (m/s)'] = t3.apply(_vel, axis=1)
 
@@ -300,26 +326,27 @@ with tab3:
             # sort estável para evitar embaralhar empates de ordem
             t3 = t3.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
 
-        # Propagação por ramo: p_in -> perdas -> p_out, preservando a ordem atual da tabela
+        # Propagação por ramo: P_in -> perdas -> P_out, preservando a ordem atual da tabela
         results = []
         for ramo, grp in t3.groupby('ramo', sort=False):
-            p_in = H_res * KPA_PER_M  # pressão inicial do ramo (A)
+            P_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
             for _, r in grp.iterrows():
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
                 hf_loc  = J_kPa_m * _num(r['leq_m'])
-                p_disp  = KPA_PER_M * _num(r.get('dz_io_m', 0.0))  # γ·(z_i − z_f)
+                p_disp  = KPA_PER_M * _num(r.get('dz_io_m', 0.0))
                 p_out   = p_in + p_disp - hf_cont - hf_loc
                 row = r.to_dict()
-                row.update({'p_in (kPa)': p_in,
-                           'hf_cont (kPa)': hf_cont,
-                           'hf_loc (kPa)': hf_loc,
-                           'p_disp (kPa)': p_disp,
-                           'p_out (kPa)': p_out})
+                row.update({
+                    'p_in (kPa)': P_in,
+                    'hf_cont (kPa)': hf_cont,
+                    'hf_loc (kPa)': hf_loc,
+                    'p_disp (kPa)': hf_alt,
+                    'p_out (kPa)': P_out,
+                })
                 results.append(row)
                 p_in = p_out
-                p_in = p_out
-
+                P_in = P_out  # próximo trecho inicia com a pressão de saída deste
         t_out = pd.DataFrame(results)
 
         show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',

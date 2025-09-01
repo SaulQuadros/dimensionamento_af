@@ -1,4 +1,4 @@
-de_mm,dref_pol,cotovelo_90_raio_longo_m,cotovelo_90_raio_medio_m,cotovelo_90_raio_curto_m,cotovelo_45_m,curva_90_r_div_d_1_2_m,curva_90_r_div_d_1_m,curva_45_m,entrada_normal_m,entrada_de_borda_m,registro_de_gaveta_aberto_m,registro_de_globo_aberto_m,registro_de_angulo_aberto_m,te_passagem_direta_m,te_passagem_lateral_m,te_saida_bilateral_m,valvula_de_pe_e_crivo_m,saida_da_canalizacao_m,valvula_de_retencao_tipo_leve_m,valvula_de_retencao_tipo_pesado_m
+de_mm,dref_pol,cotovelo_90_raio_longo_m,cotovelo_90_raio_medio_m,cotovelo_90_raio_curto_m,cotovelo_45_m,curva_90_r_div_d_1_2_m,curva_90_r_div_d_1_m,curva_45_m,entrada_normal_m,entrada_de_borda_m,registro_de_gaveta_aberto_m,registro_de_globo_aberto_m,registro_de_angulo_aberto_m,te_passagem_direta_m,te_passagem_direita_m,te_saida_lateral_m,valvula_de_pe_e_crivo_m,saida_da_canalizacao_m,valvula_de_retencao_tipo_leve_m,valvula_de_retencao_tipo_pesado_m
 13,01/fev,0.3,0.4,0.5,0.2,0.2,0.3,0.2,0.2,0.4,0.1,4.9,2.6,0.3,1.0,1.0,3.6,0.4,1.1,1.6
 19,03/abr,0.4,0.6,0.7,0.3,0.3,0.4,0.2,0.2,0.5,0.1,6.7,3.6,0.4,1.4,1.4,5.6,0.5,1.6,2.4
 25,1,0.5,0.7,0.9,0.4,0.3,0.5,0.3,0.3,0.7,0.2,9.0,4.7,0.5,1.7,1.7,7.3,0.7,2.1,3.2
