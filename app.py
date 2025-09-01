@@ -45,10 +45,36 @@ def trecho_label(r):
     return f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}"
 
 # ----------------- Tables -----------------
+
+def _read_eq_csv(path: str) -> pd.DataFrame:
+    # Robust reader for PVC/FoFo L_eq tables
+    try:
+        df = pd.read_csv(path)
+        if df.shape[1] > 1:
+            pass
+        else:
+            df = pd.read_csv(path, sep=';')
+    except Exception:
+        df = pd.read_csv(path, sep=None, engine='python')
+    # Normalize headers
+    df.columns = [c.strip() for c in df.columns]
+    # Normalize values
+    if 'de_mm' in df.columns:
+        df['de_mm'] = pd.to_numeric(df['de_mm'], errors='coerce')
+    if 'dref_pol' in df.columns:
+        df['dref_pol'] = df['dref_pol'].astype(str)
+    for c in df.columns:
+        if c not in ('de_mm','dref_pol'):
+            s = df[c].astype(str).str.replace(',', '.', regex=False).str.replace('−','-', regex=False)
+            df[c] = pd.to_numeric(s, errors='coerce')
+    if 'de_mm' in df.columns:
+        df = df.sort_values('de_mm').reset_index(drop=True)
+    return df
+
+
 def load_tables():
-    base = Path(__file__).parent
-    pvc = pd.read_csv(base / 'data/pvc_pl_eqlen.csv')
-    fofo = pd.read_csv(base / 'data/fofo_pl_eqlen.csv')
+    pvc = _read_eq_csv('data/pvc_pl_eqlen.csv')
+    fofo = _read_eq_csv('data/fofo_pl_eqlen.csv')
     return pvc, fofo
 
 def get_dn_series(table):
@@ -209,7 +235,7 @@ with tab2:
         base['label'] = base.apply(trecho_label, axis=1)
         sel = st.selectbox('Selecione o trecho para preencher quantidades', base['label'].tolist())
         r = base[base['label']==sel].iloc[0]
-        dn_ref = r.get('de_ref_mm') or r.get('dn_mm')
+        dn_ref = r.get('dn_mm')
         eql_row, _, _ = lookup_row_by_mm(table_mat, dn_ref)
         display_labels = [pretty(c) for c in piece_cols]
         df = pd.DataFrame({
