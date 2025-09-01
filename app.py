@@ -1,6 +1,18 @@
 
 import streamlit as st
 import pandas as pd
+import unicodedata
+
+def _material_key(x: str) -> str:
+    # normalize accents and case
+    if not isinstance(x, str):
+        return 'PVC'
+    y = ''.join(c for c in unicodedata.normalize('NFKD', x) if not unicodedata.combining(c)).lower().strip()
+    # common aliases
+    if 'fofo' in y or 'ferro' in y or 'fundido' in y:
+        return 'FoFo'
+    return 'PVC'
+
 import json
 from pathlib import Path
 
@@ -162,7 +174,9 @@ with tab1:
         p_min_ref_kPa = c10.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5, value=pmin_default, format='%.2f')
         ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)'))
     if ok:
-        table_mat = pvc_table if material_sistema=='PVC' else fofo_table
+        mat_key = _material_key(material_sistema)
+        table_mat = pvc_table if mat_key=='PVC' else fofo_table
+        st.caption(f'Tabela L_eq em uso: **{mat_key}**')
         _row, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
         base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
         nova = {'id':id_val,'ramo':ramo,'ordem':int(ordem),'de_no':de_no,'para_no':para_no,
@@ -187,7 +201,9 @@ with tab2:
     elif material_sistema == '(selecione)':
         st.warning('Selecione o Material do Sistema na barra lateral.')
     else:
-        table_mat = pvc_table if material_sistema=='PVC' else fofo_table
+        mat_key = _material_key(material_sistema)
+        table_mat = pvc_table if mat_key=='PVC' else fofo_table
+        st.caption(f'Tabela L_eq em uso: **{mat_key}**')
         piece_cols, dn_name = piece_columns_for(table_mat)
         base = base.copy()
         base['label'] = base.apply(trecho_label, axis=1)
