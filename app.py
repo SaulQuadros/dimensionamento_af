@@ -1,11 +1,12 @@
-
 import streamlit as st
 import pandas as pd
 import json
 from pathlib import Path
 
-KPA_PER_MCA = 9.80665  # 1 m.c.a. ≈ 9.80665 kPa
+# ----------------- Constants -----------------
+KPA_PER_M = 9.80665  # 1 m.c.a. ≈ 9.80665 kPa
 
+# ----------------- Small helpers -----------------
 def _s(x):
     try:
         if pd.isna(x): return ''
@@ -24,14 +25,13 @@ def _num(x, default=0.0):
         return default
 
 def _i(x, default=0):
-    try:
-        return int(_num(x, default))
-    except Exception:
-        return default
+    try: return int(_num(x, default))
+    except Exception: return default
 
 def trecho_label(r):
     return f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}"
 
+# ----------------- Tables -----------------
 def load_tables():
     base = Path(__file__).parent
     pvc = pd.read_csv(base / 'pvc_perda_local_equivalente.csv')
@@ -52,10 +52,8 @@ def piece_columns_for(table):
 
 def lookup_row_by_mm(table, ref_mm):
     dn_series, dn_name = get_dn_series(table)
-    try:
-        x = float(ref_mm)
-    except Exception:
-        x = 0.0
+    try: x = float(ref_mm)
+    except Exception: x = 0.0
     idx = (dn_series - x).abs().idxmin()
     row = table.loc[idx]
     de_ref_mm = float(row.get(dn_name, 0) or 0)
@@ -64,8 +62,7 @@ def lookup_row_by_mm(table, ref_mm):
 
 def pretty(col):
     lbl = col
-    if lbl.endswith('_m'):
-        lbl = lbl[:-2]
+    if lbl.endswith('_m'): lbl = lbl[:-2]
     lbl = lbl.replace('_div_', '/').replace('_r_', ' R ')
     lbl = lbl.replace('_', ' ').strip().title()
     lbl = (lbl
@@ -77,22 +74,27 @@ def pretty(col):
     )
     return lbl
 
+# ----------------- Headloss models -----------------
 def j_hazen_williams(Q_Ls, D_mm, C):
+    # Q in L/s -> m3/s ; D in mm -> m ; J in m/m
     Q = max(0.0, _num(Q_Ls, 0.0)) / 1000.0
     D = max(0.0, _num(D_mm, 0.0)) / 1000.0
-    if D <= 0.0 or C <= 0.0:
-        return 0.0
-    return 10.67 * (Q ** 1.852) / ((C ** 1.852) * (D ** 4.87))
+    if D <= 0.0 or C <= 0.0: return 0.0
+    return 10.67 * (Q ** 1.852) / ( (C ** 1.852) * (D ** 4.87) )
 
 def j_fair_whipple_hsiao(Q_Ls, D_mm):
+    # Provided form, already for Q in L/s and D in mm ; J in m/m
     Q = max(0.0, _num(Q_Ls, 0.0))
     D = max(0.0, _num(D_mm, 0.0))
-    if D <= 0.0:
-        return 0.0
+    if D <= 0.0: return 0.0
     return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
 
-st.set_page_config(page_title='SPAF – kPa + HW/FWH + L_eq por DN ref.', layout='wide')
-st.title('Dimensionamento – Barrilete e Colunas (kPa + Hazen-Williams / Fair-Whipple-Hsiao)')
+# Convert gradient J (m/m) to kPa per meter
+def j_to_kpa_per_m(J_m_per_m): return J_m_per_m * KPA_PER_M
+
+# ----------------- App -----------------
+st.set_page_config(page_title='SPAF – kPa + HW/FWH + L_eq por DN ref. + P(A)', layout='wide')
+st.title('Dimensionamento – Barrilete e Colunas (kPa • Hazen-Williams / Fair-Whipple-Hsiao • Nível do Reservatório)')
 
 pvc_table, fofo_table = load_tables()
 
@@ -106,11 +108,19 @@ with st.sidebar:
     projeto_nome = st.text_input('Nome do Projeto', 'Projeto Genérico')
     material_sistema = st.selectbox('Material do Sistema', ['(selecione)','PVC','FoFo'], index=0)
     modelo_perda = st.radio('Modelo de perda contínua', ['Hazen-Williams','Fair-Whipple-Hsiao'], index=0)
+    # UC -> Q provável
     k_uc  = st.number_input('k (Q = k·Peso^exp)', value=0.30, step=0.05, format='%.2f')
     exp_uc = st.number_input('exp (Q = k·Peso^exp)', value=0.50, step=0.05, format='%.2f')
+    # Coeficientes C por material (HW)
     c_pvc = st.number_input('C (PVC)', value=150.0, step=5.0)
     c_fofo = st.number_input('C (Ferro Fundido)', value=130.0, step=5.0)
-    H_res  = st.number_input('Nível do reservatório (m) – referência z=0', value=25.0, step=0.5)
+    # Reservatório: Hmax / Hmin e nível de operação
+    st.markdown('**Nível do Reservatório (m)**')
+    H_max = st.number_input('H_max (espelho d'água no nível cheio)', value=25.0, step=0.5)
+    H_min = st.number_input('H_min (mínimo com água no ponto)', value=0.0, step=0.5)
+    frac = st.slider('Nível operacional (0 = H_min, 1 = H_max)', 0.0, 1.0, value=1.0)
+    H_res = H_min + frac * (H_max - H_min)
+    st.metric('Pressão inicial em A (kPa)', f'{H_res * KPA_PER_M:,.2f}')
 
 if 'trechos' not in st.session_state:
     empty = {c: pd.Series(dtype=t) for c,t in DTYPES.items()}
@@ -118,8 +128,9 @@ if 'trechos' not in st.session_state:
 
 tab1, tab2, tab3 = st.tabs(['1) Trechos','2) L_eq (por trecho)','3) Resultados & Exportar'])
 
+# TAB 1 — cadastro
 with tab1:
-    st.subheader('Cadastro de Trechos (usa DN interno; DN **referencial** vem da tabela do material)')
+    st.subheader('Cadastro de Trechos (DN interno informado; DN **referencial** vem do material)')
     if material_sistema == '(selecione)':
         st.warning('Escolha o **Material do Sistema** na barra lateral para habilitar.')
     with st.form('form_add', clear_on_submit=True):
@@ -128,8 +139,8 @@ with tab1:
         ramo = c2.text_input('ramo', value='A')
         ordem = c3.number_input('ordem', min_value=1, step=1, value=1)
         c4,c5 = st.columns(2)
-        de_no = c4.text_input('de_no', value='RS')
-        para_no = c5.text_input('para_no', value='T1')
+        de_no = c4.text_input('de_no', value='A')
+        para_no = c5.text_input('para_no', value='B')
         c6,c7,c8 = st.columns(3)
         dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
@@ -153,6 +164,7 @@ with tab1:
     vis = pd.DataFrame(st.session_state['trechos']).reindex(columns=[c for c in BASE_COLS if c!='leq_m'])
     st.dataframe(vis, use_container_width=True, height=320)
 
+# TAB 2 — L_eq por trecho (baseado no DN referencial)
 with tab2:
     st.subheader('Comprimento Equivalente — editar por trecho (baseado no DN **referencial**)')
     base = pd.DataFrame(st.session_state['trechos'])
@@ -196,45 +208,62 @@ with tab2:
                 st.success(f'L_eq aplicado ao trecho {sel}: {L:.2f} m')
             st.metric('L_eq do trecho (m)', f'{L:.2f}')
 
+# TAB 3 — resultados (kPa) com J em kPa/m e propagação P_in -> P_out
 with tab3:
-    st.subheader('Resultados (pressões em kPa) & Exportar')
+    st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no ponto A')
     t3 = pd.DataFrame(st.session_state.get('trechos', {}))
     if t3.empty:
         st.info('Cadastre trechos e atribua L_eq na aba 2.')
     else:
         t3 = t3.copy()
-        t3['Q (L/s)'] = (st.session_state.get('k_uc_val', None) or 0)  # placeholder
-        t3['Q (L/s)'] = (0)  # reset
-        t3['Q (L/s)'] = (st.session_state.get('k_uc_val', None) or 0)  # not used
-        # use sidebar values:
-        t3['Q (L/s)'] = (k_uc * (t3['peso_trecho'] ** exp_uc))
-        def J_row(rr):
+        # Q provável (L/s)
+        t3['Q (L/s)'] = k_uc * (t3['peso_trecho'] ** exp_uc)
+
+        # Gradiente J (m/m) e em kPa/m
+        def J_m(rr):
             if modelo_perda == 'Hazen-Williams':
-                C = c_pvc if material_sistema=='PVC' else c_fofo
+                C = 150.0 if material_sistema=='PVC' else 130.0
                 return j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
             else:
                 return j_fair_whipple_hsiao(rr['Q (L/s)'], rr['dn_mm'])
-        t3['J (m/m)'] = t3.apply(J_row, axis=1)
-        t3['hf_continua (m)'] = t3['J (m/m)'] * t3['comp_real_m']
-        t3['hf_local (m)']    = t3['J (m/m)'] * t3['leq_m']
-        t3['hf_total (m)']    = t3['hf_continua (m)'] + t3['hf_local (m)']
-        t3 = t3.sort_values(by=['ramo','ordem'], na_position='last')
-        t3['hf_acum_ramo (m)'] = t3.groupby('ramo')['hf_total (m)'].cumsum()
-        t3['z_acum_ramo (m)']  = t3.groupby('ramo')['delta_z_m'].cumsum()
-        t3['P_disp_final (m)'] = (H_res - t3['z_acum_ramo (m)']) - t3['hf_acum_ramo (m)']
-        t3['hf_continua (kPa)'] = t3['hf_continua (m)'] * KPA_PER_MCA
-        t3['hf_local (kPa)']    = t3['hf_local (m)']    * KPA_PER_MCA
-        t3['hf_total (kPa)']    = t3['hf_total (m)']    * KPA_PER_MCA
-        t3['hf_acum_ramo (kPa)']= t3['hf_acum_ramo (m)']* KPA_PER_MCA
-        t3['P_disp_final (kPa)']= t3['P_disp_final (m)']* KPA_PER_MCA
+        t3['J (m/m)'] = t3.apply(J_m, axis=1)
+        t3['J (kPa/m)'] = t3['J (m/m)'] * KPA_PER_M
+
+        # Ordena por ramo e ordem
+        t3 = t3.sort_values(by=['ramo','ordem'], na_position='last').reset_index(drop=True)
+
+        # Propagação por ramo: P_in -> perdas -> P_out
+        results = []
+        for ramo, grp in t3.groupby('ramo', sort=False):
+            P_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
+            for _, r in grp.iterrows():
+                J_kPa_m = _num(r['J (kPa/m)'])
+                hf_cont = J_kPa_m * _num(r['comp_real_m'])
+                hf_loc  = J_kPa_m * _num(r['leq_m'])
+                hf_alt  = KPA_PER_M * _num(r['delta_z_m'])  # sobe (Δz>0) -> perde
+                P_out   = P_in - (hf_cont + hf_loc + hf_alt)
+                row = r.to_dict()
+                row.update({
+                    'P_in (kPa)': P_in,
+                    'hf_cont (kPa)': hf_cont,
+                    'hf_loc (kPa)': hf_loc,
+                    'hf_alt (kPa)': hf_alt,
+                    'P_out (kPa)': P_out,
+                })
+                results.append(row)
+                P_in = P_out  # próximo trecho inicia com a pressão de saída deste
+        t_out = pd.DataFrame(results)
+
         show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','delta_z_m',
-                     'peso_trecho','leq_m','Q (L/s)','J (m/m)',
-                     'hf_continua (kPa)','hf_local (kPa)','hf_total (kPa)',
-                     'hf_acum_ramo (kPa)','P_disp_final (kPa)']
-        st.dataframe(t3[show_cols], use_container_width=True, height=480)
+                     'peso_trecho','leq_m','Q (L/s)','J (kPa/m)',
+                     'P_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_alt (kPa)','P_out (kPa)']
+        st.dataframe(t_out[show_cols], use_container_width=True, height=520)
+
+        # Export JSON com parâmetros + tabela final
         params = {'projeto': projeto_nome, 'material': material_sistema, 'modelo_perda': modelo_perda,
-                  'k_uc': k_uc, 'exp_uc': exp_uc, 'c_pvc': c_pvc, 'c_fofo': c_fofo, 'H_res_m': H_res}
-        proj = {'params': params, 'trechos': t3[show_cols].to_dict(orient='list')}
+                  'k_uc': k_uc, 'exp_uc': exp_uc, 'C_PVC': 150.0, 'C_FoFo': 130.0,
+                  'H_max_m': H_max, 'H_min_m': H_min, 'H_op_m': H_res, 'KPA_PER_M': KPA_PER_M}
+        proj = {'params': params, 'trechos': t_out[show_cols].to_dict(orient='list')}
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
