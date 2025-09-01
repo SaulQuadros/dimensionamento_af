@@ -7,13 +7,13 @@
 import streamlit as st
 
 def _st_rerun():
-    # Compat: Streamlit >=1.30 uses _st_rerun(); em versões antigas existe _st_rerun()
+    # Compat handler without recursion
     if hasattr(st, 'rerun'):
-        _st_rerun()
+        st.rerun()
     elif hasattr(st, 'experimental_rerun'):
-        _st_rerun()
+        st.experimental_rerun()
     else:
-        pass
+        return
 
 import pandas as pd
 import json
@@ -202,11 +202,58 @@ with tab1:
 # ============================
 # Painel de gerenciamento de trechos (excluir / mover)
 # ============================
+
 st.subheader('Gerenciar trechos')
+import pandas as pd
+
+def _move_row_action(row_id, ramo_val, direction):
+    df = pd.DataFrame(st.session_state.get('trechos', pd.DataFrame()))
+    if df.empty or 'ramo' not in df.columns or 'ordem' not in df.columns:
+        return
+    if 'id' not in df.columns:
+        # fallback: attach a synthetic id based on current order
+        df = df.reset_index().rename(columns={'index':'id'})
+    sub = df[df['ramo']==ramo_val].sort_values('ordem', kind='stable')
+    ids = sub['id'].tolist()
+    if row_id not in ids:
+        return
+    i = ids.index(row_id)
+    if direction == 'up' and i > 0:
+        ids[i-1], ids[i] = ids[i], ids[i-1]
+    elif direction == 'down' and i < len(ids)-1:
+        ids[i], ids[i+1] = ids[i+1], ids[i]
+    # reatribui 'ordem' sequencial dentro do ramo
+    for k, rid in enumerate(ids, start=1):
+        df.loc[df['id']==rid, 'ordem'] = k
+    st.session_state['trechos'] = df
+    if hasattr(st, 'rerun'):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+def _delete_row_action(row_id, ramo_val):
+    df = pd.DataFrame(st.session_state.get('trechos', pd.DataFrame()))
+    if df.empty:
+        return
+    if 'id' not in df.columns:
+        df = df.reset_index().rename(columns={'index':'id'})
+    df = df[df['id'] != row_id].reset_index(drop=True)
+    if 'ramo' in df.columns and 'ordem' in df.columns:
+        for r in df['ramo'].dropna().unique().tolist():
+            mask = df['ramo']==r
+            order_ids = df.loc[mask].sort_values('ordem', kind='stable')['id'].tolist()
+            for k, rid in enumerate(order_ids, start=1):
+                df.loc[df['id']==rid, 'ordem'] = k
+    st.session_state['trechos'] = df
+    if hasattr(st, 'rerun'):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
 if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.DataFrame) and not st.session_state['trechos'].empty:
     tman = st.session_state['trechos'].copy()
     if 'ramo' in tman.columns and 'ordem' in tman.columns:
-        tman = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+        tman = tman.sort_values(['ramo','ordem'], kind='stable').reset_index(drop=True)
     else:
         tman = tman.reset_index(drop=True)
     r_opt = ['Todos'] + (sorted([str(x) for x in tman['ramo'].dropna().unique().tolist()]) if 'ramo' in tman.columns else [])
@@ -215,51 +262,38 @@ if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.
         tview = tman[tman['ramo'].astype(str)==ramo_sel].reset_index(drop=True)
     else:
         tview = tman.copy()
-    st.write('Clique para **excluir** ou **mover** o trecho na ordem. As alterações são imediatas e afetam as demais abas.')
-    for idx in tview.index:
-        r = tview.loc[idx]
-        cols = st.columns([2,2,2,2,8])
-        with cols[4]:
-            st.write(f"**{r.get('ramo','?')}-{r.get('ordem','?')}**  [{r.get('de_no','?')} → {r.get('para_no','?')}]  DN={r.get('dn_mm','?')} mm  L={r.get('comp_real_m','?')} m")
-        with cols[0]:
-            if st.button('🗑️ Excluir', key=f"del_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
-                mask = (tman['ramo'].astype(str)==str(r.get('ramo'))) & (tman['ordem']==r.get('ordem')) & (tman['de_no']==r.get('de_no')) & (tman['para_no']==r.get('para_no'))
-                t_new = tman.loc[~mask].copy().reset_index(drop=True)
-                if all(c in t_new.columns for c in ['ramo','ordem']):
-                    t_new['ordem'] = t_new.groupby('ramo').cumcount()+1
-                st.session_state['trechos'] = t_new
-                _st_rerun()
-        with cols[1]:
-            if st.button('⬆️ Subir', key=f"up_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
-                if all(c in tman.columns for c in ['ramo','ordem']):
-                    ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
-                    if ordem_v > 1:
-                        i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
-                        i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v-1)
-                        tman.loc[i1,'ordem'] = ordem_v-1
-                        tman.loc[i2,'ordem'] = ordem_v
-                        t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
-                        st.session_state['trechos'] = t_new
-                        _st_rerun()
-        with cols[2]:
-            if st.button('⬇️ Descer', key=f"down_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
-                if all(c in tman.columns for c in ['ramo','ordem']):
-                    ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
-                    max_ord = int(tman.loc[tman['ramo']==ramo_v, 'ordem'].max())
-                    if ordem_v < max_ord:
-                        i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
-                        i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v+1)
-                        tman.loc[i1,'ordem'] = ordem_v+1
-                        tman.loc[i2,'ordem'] = ordem_v
-                        t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
-                        st.session_state['trechos'] = t_new
-                        _st_rerun()
-        with cols[3]:
-            pass
+
+    default_cols = [c for c in ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho'] if c in tview.columns]
+    show_cols = default_cols
+
+    st.caption('Use os botões no final de cada linha para reordenar (↑, ↓) ou excluir (🗑).')
+    head = st.columns([*([1]*len(show_cols)), 1.2], gap='small')
+    for c, name in zip(head[:-1], show_cols):
+        c.markdown(f"**{name}**")
+    head[-1].markdown("**Ações**")
+
+    for i, row in tview.reset_index(drop=True).iterrows():
+        row_cols = st.columns([*([1]*len(show_cols)), 1.2], gap='small')
+        for c, name in zip(row_cols[:-1], show_cols):
+            c.markdown(f"{row.get(name, '')}")
+        with row_cols[-1]:
+            a1, a2, a3 = st.columns(3, gap='small')
+            with a1:
+                up = st.button("↑", key=f"mgr_up_{row.get('id', i)}", help="Mover para cima", disabled=(i==0))
+            with a2:
+                down = st.button("↓", key=f"mgr_down_{row.get('id', i)}", help="Mover para baixo", disabled=(i==len(tview)-1))
+            with a3:
+                delete = st.button("🗑", key=f"mgr_del_{row.get('id', i)}", help="Excluir esta linha")
+        rid = row.get('id', i)
+        ramo_val = row.get('ramo', None)
+        if up:
+            _move_row_action(rid, ramo_val, 'up')
+        if down:
+            _move_row_action(rid, ramo_val, 'down')
+        if delete:
+            _delete_row_action(rid, ramo_val)
 else:
     st.info('Nenhum trecho cadastrado ainda.')
-
-
 # TAB 2 — L_eq por trecho (baseado no DN referencial)
 with tab2:
     st.subheader('Comprimento Equivalente — editar por trecho (baseado no DN **referencial**)')
