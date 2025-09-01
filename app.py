@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[ ]:
+
 
 import streamlit as st
 import pandas as pd
@@ -153,7 +158,10 @@ with tab1:
         c6,c7,c8 = st.columns(3)
         dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
-        dz_io_m = c8.number_input("dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)", step=0.1, value=0.0, format='%.2f')', step=0.1, value=0.0, format='%.2f')
+        dz_io_m = c8.number_input(
+    "dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)",
+    step=0.1, value=0.0, format='%.2f'
+)
         peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
         c9,c10 = st.columns([1,1])
         tipo_ponto = c9.selectbox('Tipo do ponto no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
@@ -362,3 +370,4 @@ with tab3:
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
+
