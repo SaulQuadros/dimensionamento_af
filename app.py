@@ -341,14 +341,16 @@ with tab2:
             st.metric('L_eq do trecho (m)', f'{L:.2f}')
 
 # TAB 3 — resultados (kPa) com J em kPa/m e propagação P_in -> P_out
+
 with tab3:
-    st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no ponto A')
-    st.caption('Fórmula: **p_out = p_in + γ·(z_i − z_f) − h_f^cont − h_f^loc**; γ = 9,80665 kPa/m')
+    st.subheader('Resultados (kPa) — Propagação **Nodal** (p_out em B vira p_in dos trechos que começam em B)')
+    st.caption('Fórmula: **p_out = p_in + γ·(z_i − z_f) − (h_f^cont + h_f^loc)**; γ = 9,80665 kPa/m')
     t3 = pd.DataFrame(st.session_state.get('trechos', {}))
     if t3.empty:
         st.info('Cadastre trechos e atribua L_eq na aba 2.')
     else:
         t3 = t3.copy()
+
         # Q provável (L/s)
         t3['Q (L/s)'] = (k_uc * (t3['peso_trecho'] ** exp_uc)).astype(float)
 
@@ -373,39 +375,132 @@ with tab3:
             return Q / A
         t3['v (m/s)'] = t3.apply(_vel, axis=1)
 
-        # Opção de ordenação (padrão = manter a ordem de cadastro dos trechos)
-        ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False, help='Quando desligado, os resultados seguem a mesma ordem mostrada em "Trechos".')
-        if ordenar:
-            t3 = t3.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
+        # === UI Condições de contorno nos nós-fonte ===
+        # Identificar nós-fonte (sem alimentador chegando)
+        de_series = t3['de_no'].astype(str)
+        para_series = t3['para_no'].astype(str)
+        nodes = set(de_series.tolist()) | set(para_series.tolist())
+        in_edge = {}
+        for i, v in para_series.reset_index(drop=True).items():
+            if str(v) not in in_edge:
+                in_edge[str(v)] = i
+        fontes = sorted([n for n in nodes if n not in in_edge])
 
-        # Propagação por ramo: p_in -> perdas -> p_out
-        results = []
-        for ramo, grp in t3.groupby('ramo', sort=False):
-            p_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
-            for _, r in grp.iterrows():
-                J_kPa_m = _num(r['J (kPa/m)'])
-                hf_cont = J_kPa_m * _num(r['comp_real_m'])
-                hf_loc  = J_kPa_m * _num(r['leq_m'])
-                p_disp  = KPA_PER_M * _num(r.get('dz_io_m', 0.0))
-                p_out   = p_in + p_disp - hf_cont - hf_loc
-                row = r.to_dict()
-                row.update({
-                    'p_in (kPa)': p_in,
-                    'hf_cont (kPa)': hf_cont,
-                    'hf_loc (kPa)': hf_loc,
-                    'p_disp (kPa)': p_disp,
-                    'p_out (kPa)': p_out,
-                })
-                results.append(row)
-                p_in = p_out
-        t_out = pd.DataFrame(results)
+        src_press_kPa = {}
+        if fontes:
+            with st.expander("Condições de contorno (nós-fonte)", expanded=False):
+                st.caption("Informe H (m.c.a.) nos nós que **não têm** trecho chegando.")
+                head_ref = st.selectbox("Padrão para nós-fonte", ["H_op (operacional)","H_max (espelho máx.)","H_min (espelho mín.)","Manual"], index=0,
+                                        help="Valor padrão para preencher os campos; você pode sobrescrever nó a nó.")
+                for n in fontes:
+                    if head_ref.startswith("H_op"): h_default = H_res
+                    elif head_ref.startswith("H_max"): h_default = H_max
+                    elif head_ref.startswith("H_min"): h_default = H_min
+                    else: h_default = 0.0
+                    h_mca = st.number_input(f"H (m.c.a.) em {n}", value=float(h_default), step=0.1, format="%.2f", key=f"h_src_{n}")
+                    src_press_kPa[n] = h_mca * KPA_PER_M
 
-        show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',
-                     'peso_trecho','leq_m','Q (L/s)','v (m/s)','J (kPa/m)',
-                     'p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','p_disp (kPa)','p_out (kPa)']
-        st.dataframe(t_out[show_cols], use_container_width=True, height=520)
+        # === Propagação Nodal ===
+        out_edges = {}
+        in_edge_idx = {}
+        t3 = t3.reset_index(drop=True)
+        for idx, row in t3.iterrows():
+            u = str(row['de_no'])
+            v = str(row['para_no'])
+            out_edges.setdefault(u, []).append(idx)
+            if v in in_edge_idx:
+                st.error(f"Conflito: mais de um trecho termina no nó '{v}'. Índices {in_edge_idx[v]} e {idx}. Ajuste a rede para um único alimentador por nó.")
+                st.stop()
+            in_edge_idx[v] = idx
+            out_edges.setdefault(v, out_edges.get(v, []))
 
-        # Export JSON
+        pressao_nos = {}
+        for n in fontes:
+            pressao_nos[n] = float(src_press_kPa.get(n, H_res * KPA_PER_M))
+
+        t3['hf_cont (kPa)'] = 0.0
+        t3['hf_loc (kPa)']  = 0.0
+        t3['p_in (kPa)']    = pd.NA
+        t3['p_out (kPa)']   = pd.NA
+        t3['p_out (m.c.a.)']= pd.NA
+        if 'p_min_ref_kPa' in t3.columns:
+            t3['p_margin (kPa)'] = pd.NA
+        t3['dZ_term (kPa)'] = pd.NA
+        t3['hf_total (kPa)']= pd.NA
+
+        from collections import deque
+        q = deque(fontes)
+        processed = set()
+        visited_nodes = set(fontes)
+
+        while q:
+            u = q.popleft()
+            p_u = float(pressao_nos.get(u, 0.0))
+            for eidx in out_edges.get(u, []):
+                if eidx in processed:
+                    continue
+                rr = t3.loc[eidx]
+                v = str(rr['para_no'])
+                J_kPa_m = _num(rr['J (kPa/m)'])
+                L_real  = _num(rr.get('comp_real_m'), 0.0)
+                L_eq    = _num(rr.get('leq_m'), 0.0)
+                dz      = _num(rr.get('dz_io_m'), 0.0)
+
+                hf_cont = J_kPa_m * L_real
+                hf_loc  = J_kPa_m * L_eq
+                p_out = p_u + KPA_PER_M*dz - (hf_cont + hf_loc)
+
+                dZ_term = KPA_PER_M*dz
+                hf_total = (hf_cont + hf_loc)
+
+                t3.at[eidx, 'hf_cont (kPa)'] = round(hf_cont, 3)
+                t3.at[eidx, 'hf_loc (kPa)']  = round(hf_loc, 3)
+                t3.at[eidx, 'p_in (kPa)']    = round(p_u, 3)
+                t3.at[eidx, 'p_out (kPa)']   = round(p_out, 3)
+                t3.at[eidx, 'p_out (m.c.a.)']= round(p_out / KPA_PER_M, 3)
+                t3.at[eidx, 'dZ_term (kPa)'] = round(dZ_term, 3)
+                t3.at[eidx, 'hf_total (kPa)']= round(hf_total, 3)
+                if 'p_min_ref_kPa' in t3.columns:
+                    t3.at[eidx, 'p_margin (kPa)'] = round(p_out - _num(rr.get('p_min_ref_kPa'),0.0), 3)
+
+                if v in pressao_nos and abs(pressao_nos[v] - p_out) > 1e-6:
+                    st.warning(f"Pressão no nó '{v}' já definida (={pressao_nos[v]:.3f} kPa) e difere do novo valor (={p_out:.3f} kPa). Verifique a rede.")
+                pressao_nos[v] = p_out
+
+                processed.add(eidx)
+                if v not in visited_nodes:
+                    visited_nodes.add(v)
+                    q.append(v)
+
+        if len(processed) != len(t3):
+            pend = sorted(set(range(len(t3))) - processed)
+            st.error(f"Não foi possível propagar para {len(pend)} trecho(s): {pend}. "
+                     f"Causas comuns: ciclos na rede ou ausência de nós-fonte com pressão definida.")
+
+        ordenar = st.checkbox('Ordenar por ramo/ordem (apenas visual)', value=False,
+                              help='Não afeta o cálculo. O cálculo é topológico por nós.')
+        if ordenar and 'ramo' in t3.columns and 'ordem' in t3.columns:
+            t_out = t3.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
+        else:
+            t_out = t3
+
+        show_cols = [c for c in [
+            'id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref',
+            'comp_real_m','leq_m','dz_io_m','peso_trecho',
+            'Q (L/s)','v (m/s)','J (kPa/m)','J (m/m)',
+            'p_in (kPa)','dZ_term (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_total (kPa)','p_out (kPa)','p_out (m.c.a.)',
+            'p_min_ref_kPa','p_margin (kPa)'
+        ] if c in t_out.columns]
+
+        st.dataframe(t_out[show_cols], use_container_width=True, height=560)
+
+        with st.expander('🔍 Diagnóstico do balanço por trecho', expanded=False):
+            dbg_cols = [c for c in ['id','de_no','para_no','p_in (kPa)','dZ_term (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_total (kPa)','p_out (kPa)'] if c in t_out.columns]
+            if dbg_cols:
+                st.dataframe(t_out[dbg_cols], use_container_width=True, height=320)
+            else:
+                st.info('Sem colunas diagnósticas disponíveis.')
+
         params = {'projeto': projeto_nome, 'material': material_sistema, 'modelo_perda': modelo_perda,
                   'k_uc': k_uc, 'exp_uc': exp_uc, 'C_PVC': c_pvc, 'C_FoFo': c_fofo,
                   'H_max_m': H_max, 'H_min_m': H_min, 'H_op_m': H_res, 'KPA_PER_M': KPA_PER_M}
