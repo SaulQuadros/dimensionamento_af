@@ -1,8 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
 
 import streamlit as st
 import pandas as pd
@@ -95,9 +90,6 @@ def j_fair_whipple_hsiao(Q_Ls, D_mm):
     if D <= 0.0: return 0.0
     return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
 
-# Convert gradient J (m/m) to kPa per meter
-def j_to_kpa_per_m(J_m_per_m): return J_m_per_m * KPA_PER_M
-
 # ----------------- App -----------------
 st.set_page_config(page_title='SPAF – kPa + HW/FWH + L_eq por DN ref. + P(A)', layout='wide')
 st.title('Dimensionamento – Barrilete e Colunas (kPa • Hazen-Williams / Fair-Whipple-Hsiao • Nível do Reservatório)')
@@ -122,7 +114,7 @@ with st.sidebar:
     c_fofo = st.number_input('C (Ferro Fundido)', value=130.0, step=5.0)
     # Reservatório: Hmax / Hmin e nível de operação
     st.markdown('**Nível do Reservatório (m)**')
-    H_max = st.number_input("H_max (espelho d\'água no nível cheio)", value=25.0, step=0.5)
+    H_max = st.number_input("H_max (espelho d'água no nível cheio)", value=25.0, step=0.5)
     H_min = st.number_input('H_min (mínimo com água no ponto)', value=0.0, step=0.5)
     frac = st.slider('Nível operacional (0 = H_min, 1 = H_max)', 0.0, 1.0, value=1.0)
     H_res = H_min + frac * (H_max - H_min)
@@ -223,22 +215,25 @@ with tab3:
     else:
         t3 = t3.copy()
         # Q provável (L/s)
-        t3['Q (L/s)'] = k_uc * (t3['peso_trecho'] ** exp_uc)
+        t3['Q (L/s)'] = _num(0, 0) + (k_uc * (t3['peso_trecho'] ** exp_uc))
 
         # Gradiente J (m/m) e em kPa/m
         def J_m(rr):
             if modelo_perda == 'Hazen-Williams':
-                C = 150.0 if material_sistema=='PVC' else 130.0
+                C = c_pvc if material_sistema=='PVC' else c_fofo
                 return j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
             else:
                 return j_fair_whipple_hsiao(rr['Q (L/s)'], rr['dn_mm'])
         t3['J (m/m)'] = t3.apply(J_m, axis=1)
         t3['J (kPa/m)'] = t3['J (m/m)'] * KPA_PER_M
 
-        # Ordena por ramo e ordem
-        t3 = t3.sort_values(by=['ramo','ordem'], na_position='last').reset_index(drop=True)
+        # Opção de ordenação (padrão = manter a ordem de cadastro dos trechos)
+        ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False, help='Quando desligado, os resultados seguem a mesma ordem mostrada em "Trechos".')
+        if ordenar:
+            # sort estável para evitar embaralhar empates de ordem
+            t3 = t3.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
 
-        # Propagação por ramo: P_in -> perdas -> P_out
+        # Propagação por ramo: P_in -> perdas -> P_out, preservando a ordem atual da tabela
         results = []
         for ramo, grp in t3.groupby('ramo', sort=False):
             P_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
@@ -267,10 +262,9 @@ with tab3:
 
         # Export JSON com parâmetros + tabela final
         params = {'projeto': projeto_nome, 'material': material_sistema, 'modelo_perda': modelo_perda,
-                  'k_uc': k_uc, 'exp_uc': exp_uc, 'C_PVC': 150.0, 'C_FoFo': 130.0,
+                  'k_uc': k_uc, 'exp_uc': exp_uc, 'C_PVC': c_pvc, 'C_FoFo': c_fofo,
                   'H_max_m': H_max, 'H_min_m': H_min, 'H_op_m': H_res, 'KPA_PER_M': KPA_PER_M}
         proj = {'params': params, 'trechos': t_out[show_cols].to_dict(orient='list')}
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
-
