@@ -159,73 +159,17 @@ with tab1:
         dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
         dz_io_m = c8.number_input(
-    "dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)",
-    step=0.1, value=0.0, format='%.2f'
-)
+        "dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)",
+        step=0.1, value=0.0, format="%.2f"
+        )
+
         peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
         c9,c10 = st.columns([1,1])
         tipo_ponto = c9.selectbox('Tipo do ponto no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
         p_min_ref_kPa = c10.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5, value=(5.0 if 'Sem' in tipo_ponto else 10.0), format='%.2f')
-        ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)
-    # ============================
-    # Painel de gerenciamento de trechos (excluir / mover)
-    # ============================
-    st.subheader('Gerenciar trechos')
-    if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.DataFrame) and not st.session_state['trechos'].empty:
-        tman = st.session_state['trechos'].copy()
-        if 'ramo' in tman.columns and 'ordem' in tman.columns:
-            tman = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
-        else:
-            tman = tman.reset_index(drop=True)
-        r_opt = ['Todos'] + (sorted([str(x) for x in tman['ramo'].dropna().unique().tolist()]) if 'ramo' in tman.columns else [])
-        ramo_sel = st.selectbox('Filtrar por ramo', r_opt or ['Todos'], key='manage_ramo_sel')
-        if ramo_sel != 'Todos' and 'ramo' in tman.columns:
-            tview = tman[tman['ramo'].astype(str)==ramo_sel].reset_index(drop=True)
-        else:
-            tview = tman.copy()
-        st.write('Clique para **excluir** ou **mover** o trecho na ordem. As alterações são imediatas e afetam as demais abas.')
-        for idx in tview.index:
-            r = tview.loc[idx]
-            cols = st.columns([2,2,2,2,8])
-            with cols[4]:
-                st.write(f\"**{r.get('ramo','?')}-{r.get('ordem','?')}**  [{r.get('de_no','?')} → {r.get('para_no','?')}]  DN={r.get('dn_mm','?')} mm  L={r.get('comp_real_m','?')} m\")
-            with cols[0]:
-                if st.button('🗑️ Excluir', key=f\"del_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}\"):
-                    mask = (tman['ramo'].astype(str)==str(r.get('ramo'))) & (tman['ordem']==r.get('ordem')) & (tman['de_no']==r.get('de_no')) & (tman['para_no']==r.get('para_no'))
-                    t_new = tman.loc[~mask].copy().reset_index(drop=True)
-                    if all(c in t_new.columns for c in ['ramo','ordem']):
-                        t_new['ordem'] = t_new.groupby('ramo').cumcount()+1
-                    st.session_state['trechos'] = t_new
-                    st.experimental_rerun()
-            with cols[1]:
-                if st.button('⬆️ Subir', key=f\"up_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}\"):
-                    if all(c in tman.columns for c in ['ramo','ordem']):
-                        ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
-                        if ordem_v > 1:
-                            i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
-                            i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v-1)
-                            tman.loc[i1,'ordem'] = ordem_v-1
-                            tman.loc[i2,'ordem'] = ordem_v
-                            t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
-                            st.session_state['trechos'] = t_new
-                            st.experimental_rerun()
-            with cols[2]:
-                if st.button('⬇️ Descer', key=f\"down_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}\"):
-                    if all(c in tman.columns for c in ['ramo','ordem']):
-                        ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
-                        max_ord = int(tman.loc[tman['ramo']==ramo_v, 'ordem'].max())
-                        if ordem_v < max_ord:
-                            i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
-                            i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v+1)
-                            tman.loc[i1,'ordem'] = ordem_v+1
-                            tman.loc[i2,'ordem'] = ordem_v
-                            t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
-                            st.session_state['trechos'] = t_new
-                            st.experimental_rerun()
-            with cols[3]:
-                pass
-    else:
-        st.info('Nenhum trecho cadastrado ainda.')'))'))
+        ok = st.form_submit_button("➕ Adicionar trecho", disabled=(material_sistema == "(selecione)"))
+    
+
     if ok:
         mat_key = 'FoFo' if isinstance(material_sistema,str) and material_sistema.strip().lower()=='fofo' else 'PVC'
         table_mat = pvc_table if mat_key=='PVC' else fofo_table
@@ -244,6 +188,67 @@ with tab1:
         st.success('Trecho adicionado! DN referencial (nominal/externo) e "Dref Pol" preenchidos.')
     vis = pd.DataFrame(st.session_state['trechos']).reindex(columns=[c for c in BASE_COLS if c!='leq_m'])
     st.dataframe(vis, use_container_width=True, height=320)
+
+# ============================
+# Painel de gerenciamento de trechos (excluir / mover)
+# ============================
+st.subheader('Gerenciar trechos')
+if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.DataFrame) and not st.session_state['trechos'].empty:
+    tman = st.session_state['trechos'].copy()
+    if 'ramo' in tman.columns and 'ordem' in tman.columns:
+        tman = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+    else:
+        tman = tman.reset_index(drop=True)
+    r_opt = ['Todos'] + (sorted([str(x) for x in tman['ramo'].dropna().unique().tolist()]) if 'ramo' in tman.columns else [])
+    ramo_sel = st.selectbox('Filtrar por ramo', r_opt or ['Todos'], key='manage_ramo_sel')
+    if ramo_sel != 'Todos' and 'ramo' in tman.columns:
+        tview = tman[tman['ramo'].astype(str)==ramo_sel].reset_index(drop=True)
+    else:
+        tview = tman.copy()
+    st.write('Clique para **excluir** ou **mover** o trecho na ordem. As alterações são imediatas e afetam as demais abas.')
+    for idx in tview.index:
+        r = tview.loc[idx]
+        cols = st.columns([2,2,2,2,8])
+        with cols[4]:
+            st.write(f"**{r.get('ramo','?')}-{r.get('ordem','?')}**  [{r.get('de_no','?')} → {r.get('para_no','?')}]  DN={r.get('dn_mm','?')} mm  L={r.get('comp_real_m','?')} m")
+        with cols[0]:
+            if st.button('🗑️ Excluir', key=f"del_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
+                mask = (tman['ramo'].astype(str)==str(r.get('ramo'))) & (tman['ordem']==r.get('ordem')) & (tman['de_no']==r.get('de_no')) & (tman['para_no']==r.get('para_no'))
+                t_new = tman.loc[~mask].copy().reset_index(drop=True)
+                if all(c in t_new.columns for c in ['ramo','ordem']):
+                    t_new['ordem'] = t_new.groupby('ramo').cumcount()+1
+                st.session_state['trechos'] = t_new
+                st.experimental_rerun()
+        with cols[1]:
+            if st.button('⬆️ Subir', key=f"up_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
+                if all(c in tman.columns for c in ['ramo','ordem']):
+                    ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
+                    if ordem_v > 1:
+                        i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
+                        i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v-1)
+                        tman.loc[i1,'ordem'] = ordem_v-1
+                        tman.loc[i2,'ordem'] = ordem_v
+                        t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+                        st.session_state['trechos'] = t_new
+                        st.experimental_rerun()
+        with cols[2]:
+            if st.button('⬇️ Descer', key=f"down_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
+                if all(c in tman.columns for c in ['ramo','ordem']):
+                    ramo_v = r.get('ramo'); ordem_v = int(r.get('ordem') or 1)
+                    max_ord = int(tman.loc[tman['ramo']==ramo_v, 'ordem'].max())
+                    if ordem_v < max_ord:
+                        i1 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v)
+                        i2 = (tman['ramo']==ramo_v) & (tman['ordem']==ordem_v+1)
+                        tman.loc[i1,'ordem'] = ordem_v+1
+                        tman.loc[i2,'ordem'] = ordem_v
+                        t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
+                        st.session_state['trechos'] = t_new
+                        st.experimental_rerun()
+        with cols[3]:
+            pass
+else:
+    st.info('Nenhum trecho cadastrado ainda.')
+
 
 # TAB 2 — L_eq por trecho (baseado no DN referencial)
 with tab2:
@@ -301,24 +306,20 @@ with tab3:
     else:
         t3 = t3.copy()
         # Q provável (L/s)
-        t3['Q (L/s)'] = _num(0, 0) + (k_uc * (t3['peso_trecho'] ** exp_uc))
+        t3['Q (L/s)'] = (k_uc * (t3['peso_trecho'] ** exp_uc)).astype(float)
 
-        # Gradiente J (m/m) e em kPa/m
-        def J_m(rr):
+        # Gradiente J (kPa/m) e J (m/m)
+        def _J_kPa(rr):
             if modelo_perda == 'Hazen-Williams':
                 C = c_pvc if material_sistema=='PVC' else c_fofo
-                return j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
-            else:
-                return j_fair_whipple_hsiao(rr['Q (L/s)'], rr['dn_mm'])
-                def _J_kPa(rr):
-            if modelo_perda == 'Hazen-Williams':
-                C = c_pvc if material_sistema=='PVC' else c_fofo
-                j_mm = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
+                j_mm = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)  # m/m
                 return j_mm * KPA_PER_M
             else:
                 return j_fair_whipple_hsiao_kPa_per_m(rr['Q (L/s)'], rr['dn_mm'], material_sistema)
         t3['J (kPa/m)'] = t3.apply(_J_kPa, axis=1)
         t3['J (m/m)']   = t3['J (kPa/m)'] / KPA_PER_M
+
+        # Velocidade v (m/s)
         import math
         def _vel(rr):
             Q = max(0.0, _num(rr['Q (L/s)'],0.0)) / 1000.0
@@ -331,13 +332,12 @@ with tab3:
         # Opção de ordenação (padrão = manter a ordem de cadastro dos trechos)
         ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False, help='Quando desligado, os resultados seguem a mesma ordem mostrada em "Trechos".')
         if ordenar:
-            # sort estável para evitar embaralhar empates de ordem
             t3 = t3.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
 
-        # Propagação por ramo: P_in -> perdas -> P_out, preservando a ordem atual da tabela
+        # Propagação por ramo: p_in -> perdas -> p_out
         results = []
         for ramo, grp in t3.groupby('ramo', sort=False):
-            P_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
+            p_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
             for _, r in grp.iterrows():
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
@@ -346,15 +346,14 @@ with tab3:
                 p_out   = p_in + p_disp - hf_cont - hf_loc
                 row = r.to_dict()
                 row.update({
-                    'p_in (kPa)': P_in,
+                    'p_in (kPa)': p_in,
                     'hf_cont (kPa)': hf_cont,
                     'hf_loc (kPa)': hf_loc,
-                    'p_disp (kPa)': hf_alt,
-                    'p_out (kPa)': P_out,
+                    'p_disp (kPa)': p_disp,
+                    'p_out (kPa)': p_out,
                 })
                 results.append(row)
                 p_in = p_out
-                P_in = P_out  # próximo trecho inicia com a pressão de saída deste
         t_out = pd.DataFrame(results)
 
         show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',
@@ -362,7 +361,7 @@ with tab3:
                      'p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','p_disp (kPa)','p_out (kPa)']
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
 
-        # Export JSON com parâmetros + tabela final
+        # Export JSON
         params = {'projeto': projeto_nome, 'material': material_sistema, 'modelo_perda': modelo_perda,
                   'k_uc': k_uc, 'exp_uc': exp_uc, 'C_PVC': c_pvc, 'C_FoFo': c_fofo,
                   'H_max_m': H_max, 'H_min_m': H_min, 'H_op_m': H_res, 'KPA_PER_M': KPA_PER_M}
@@ -370,4 +369,3 @@ with tab3:
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
-
