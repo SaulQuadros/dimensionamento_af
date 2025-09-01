@@ -154,7 +154,7 @@ with tab1:
         peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
         ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)'))
     if ok:
-        table_mat = pvc_table if material_sistema=='PVC' else fofo_table
+        table_mat = pvc_table if material_sistema=='PVC' else (fofo_table if material_sistema=='FoFo' else None)
         _row, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
         base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
         nova = {'id':id_val,'ramo':ramo,'ordem':int(ordem),'de_no':de_no,'para_no':para_no,
@@ -173,20 +173,21 @@ with tab1:
 # TAB 2 — L_eq por trecho (baseado no DN referencial)
 with tab2:
     st.subheader('Comprimento Equivalente — editar por trecho (baseado no DN **referencial**)')
+    st.caption(f'Tabela L_eq em uso: **{material_sistema}**')
     base = pd.DataFrame(st.session_state['trechos'])
     if base.empty:
         st.info('Cadastre trechos na aba 1.')
     elif material_sistema == '(selecione)':
         st.warning('Selecione o Material do Sistema na barra lateral.')
     else:
-        table_mat = pvc_table if material_sistema=='PVC' else fofo_table
+        table_mat = pvc_table if material_sistema=='PVC' else (fofo_table if material_sistema=='FoFo' else None)
         piece_cols, dn_name = piece_columns_for(table_mat)
         base = base.copy()
         base['label'] = base.apply(trecho_label, axis=1)
         sel = st.selectbox('Selecione o trecho para preencher quantidades', base['label'].tolist())
         r = base[base['label']==sel].iloc[0]
-        dn_ref = r.get('de_ref_mm') or r.get('dn_mm')
-        eql_row, _, _ = lookup_row_by_mm(table_mat, dn_ref)
+        dn_base = r.get('dn_mm')
+        eql_row, de_ref_mm_cur, pol_ref_cur = lookup_row_by_mm(table_mat, dn_base)
         display_labels = [pretty(c) for c in piece_cols]
         df = pd.DataFrame({
             'Conexão/Peça': display_labels,
