@@ -1,0 +1,7 @@
+Checagem pós-correção
+---------------------
+FoFo: OK (idêntico aos dados oficiais)
+PVC : OK (idêntico aos dados oficiais)
+
+FoFo - colunas (total 21): cotovelo_45_m, cotovelo_90_raio_curto_m, cotovelo_90_raio_longo_m, cotovelo_90_raio_medio_m, curva_45_m, curva_90_r_div_d_1_2_m, curva_90_r_div_d_1_m, de_mm, dref_pol, entrada_de_borda_m, entrada_normal_m, registro_de_angulo_aberto_m, registro_de_gaveta_aberto_m, registro_de_globo_aberto_m, saida_da_canalizacao_m, te_passagem_direita_m, te_passagem_direta_m, te_saida_lateral_m, valvula_de_pe_e_crivo_m, valvula_de_retencao_tipo_leve_m, valvula_de_retencao_tipo_pesado_m
+PVC  - colunas (total 18): curva_45_m, curva_90_m, de_mm, dref_pol, entrada_de_borda_m, entrada_normal_m, joelho_45_m, joelho_90_m, registro_de_angulo_aberto_m, registro_de_gaveta_aberto_m, registro_de_globo_aberto_m, saida_de_canalizacao_m, te_90_passagem_direita_m, te_90_saida_bilateral_m, te_90_saida_de_lado_m, valvula_pe_e_crivo_m, valvula_retencao_tipo_leve_m, valvula_retencao_tipo_pesado_m

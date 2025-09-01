@@ -76,6 +76,18 @@ def pretty(col):
     return lbl
 
 # ----------------- Headloss models -----------------
+
+def j_fair_whipple_hsiao_kPa_per_m(Q_Ls, D_mm, material: str):
+    Q = max(0.0, _num(Q_Ls, 0.0))
+    D = max(0.0, _num(D_mm, 0.0))
+    if D <= 0.0:
+        return 0.0
+    mat = (material or '').strip().lower()
+    if mat == 'pvc':
+        return 8.695e6 * (Q ** 1.75) / (D ** 4.75)
+    else:
+        return 20.2e6  * (Q ** 1.88) / (D ** 4.88)
+
 def j_hazen_williams(Q_Ls, D_mm, C):
     # Q in L/s -> m3/s ; D in mm -> m ; J in m/m
     Q = max(0.0, _num(Q_Ls, 0.0)) / 1000.0
@@ -83,19 +95,11 @@ def j_hazen_williams(Q_Ls, D_mm, C):
     if D <= 0.0 or C <= 0.0: return 0.0
     return 10.67 * (Q ** 1.852) / ( (C ** 1.852) * (D ** 4.87) )
 
-def j_fair_whipple_hsiao_kPa_per_m(Q_Ls, D_mm, material: str):
-    # Fair–Whipple–Hsiao in kPa/m (Q in L/s, D in mm)
+def j_fair_whipple_hsiao(Q_Ls, D_mm):
+    # Provided form, already for Q in L/s and D in mm ; J in m/m
     Q = max(0.0, _num(Q_Ls, 0.0))
     D = max(0.0, _num(D_mm, 0.0))
-    if D <= 0.0:
-        return 0.0
-    mat = (material or '').strip().lower()
-    if mat == 'pvc':
-        # PVC: 8.695e6 * Q^1.75 / D^4.75  -> J in kPa/m
-        return 8.695e6 * (Q ** 1.75) / (D ** 4.75)
-    else:
-        # FoFo (ferro fundido) padrão: 20.2e6 * Q^1.88 / D^4.88  -> J in kPa/m
-        return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
+    if D <= 0.0: return 0.0
     return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
 
 # ----------------- App -----------------
@@ -104,10 +108,10 @@ st.title('Dimensionamento – Barrilete e Colunas (kPa • Hazen-Williams / Fair
 
 pvc_table, fofo_table = load_tables()
 
-BASE_COLS = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m']
+BASE_COLS = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m','p_min_ref_kPa']
 DTYPES = {'id':'string','ramo':'string','ordem':'Int64','de_no':'string','para_no':'string',
           'dn_mm':'float','de_ref_mm':'float','pol_ref':'string',
-          'comp_real_m':'float','dz_io_m':'float','peso_trecho':'float','leq_m':'float'}
+          'comp_real_m':'float','dz_io_m':'float','peso_trecho':'float','leq_m':'float','p_min_ref_kPa':'float'}
 
 with st.sidebar:
     st.header('Parâmetros Globais')
@@ -126,7 +130,7 @@ with st.sidebar:
     H_min = st.number_input('H_min (mínimo com água no ponto)', value=0.0, step=0.5)
     frac = st.slider('Nível operacional (0 = H_min, 1 = H_max)', 0.0, 1.0, value=1.0)
     H_res = H_min + frac * (H_max - H_min)
-    st.metric('Pressão inicial em A (kPa)', f'{H_res * KPA_PER_M:,.2f}')
+    st.metric('p_in em A (kPa)', f'{H_res * KPA_PER_M:,.2f}')
 
 if 'trechos' not in st.session_state:
     empty = {c: pd.Series(dtype=t) for c,t in DTYPES.items()}
@@ -150,17 +154,21 @@ with tab1:
         c6,c7,c8 = st.columns(3)
         dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
-        dz_io_m = c8.number_input("dz_io_m (m) [z_inicial - z_final]", step=0.1, value=0.0, format='%.2f')
+        dz_io_m = c8.number_input('dz_io_m (m) [z_inicial - z_final]', step=0.1, value=0.0, format='%.2f')
         peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
+        c9,c10 = st.columns([1,1])
+        tipo_ponto = c9.selectbox('Tipo do ponto no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
+        pmin_default = 5.0 if 'Sem utilização' in tipo_ponto else 10.0
+        p_min_ref_kPa = c10.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5, value=pmin_default, format='%.2f')
         ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)'))
     if ok:
-        table_mat = pvc_table if material_sistema=='PVC' else (fofo_table if material_sistema=='FoFo' else None)
+        table_mat = pvc_table if material_sistema=='PVC' else fofo_table
         _row, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
         base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
         nova = {'id':id_val,'ramo':ramo,'ordem':int(ordem),'de_no':de_no,'para_no':para_no,
                 'dn_mm':float(dn_mm),'de_ref_mm':float(de_ref_mm),'pol_ref':pol_ref,
                 'comp_real_m':float(comp_real_m),'dz_io_m':float(dz_io_m),
-                'peso_trecho':float(peso_trecho),'leq_m':0.0}
+                'peso_trecho':float(peso_trecho),'leq_m':0.0,'p_min_ref_kPa':float(p_min_ref_kPa)}
         base = pd.concat([base, pd.DataFrame([nova])], ignore_index=True)
         for c,t in DTYPES.items():
             try: base[c] = base[c].astype(t)
@@ -173,21 +181,20 @@ with tab1:
 # TAB 2 — L_eq por trecho (baseado no DN referencial)
 with tab2:
     st.subheader('Comprimento Equivalente — editar por trecho (baseado no DN **referencial**)')
-    st.caption(f'Tabela L_eq em uso: **{material_sistema}**')
     base = pd.DataFrame(st.session_state['trechos'])
     if base.empty:
         st.info('Cadastre trechos na aba 1.')
     elif material_sistema == '(selecione)':
         st.warning('Selecione o Material do Sistema na barra lateral.')
     else:
-        table_mat = pvc_table if material_sistema=='PVC' else (fofo_table if material_sistema=='FoFo' else None)
+        table_mat = pvc_table if material_sistema=='PVC' else fofo_table
         piece_cols, dn_name = piece_columns_for(table_mat)
         base = base.copy()
         base['label'] = base.apply(trecho_label, axis=1)
         sel = st.selectbox('Selecione o trecho para preencher quantidades', base['label'].tolist())
         r = base[base['label']==sel].iloc[0]
-        dn_base = r.get('dn_mm')
-        eql_row, de_ref_mm_cur, pol_ref_cur = lookup_row_by_mm(table_mat, dn_base)
+        dn_ref = r.get('de_ref_mm') or r.get('dn_mm')
+        eql_row, _, _ = lookup_row_by_mm(table_mat, dn_ref)
         display_labels = [pretty(c) for c in piece_cols]
         df = pd.DataFrame({
             'Conexão/Peça': display_labels,
@@ -218,6 +225,7 @@ with tab2:
 # TAB 3 — resultados (kPa) com J em kPa/m e propagação P_in -> P_out
 with tab3:
     st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no ponto A')
+    st.caption('Fórmula: **p_out = p_in + γ·(z_i − z_f) − h_f^cont − h_f^loc**; γ = 9,80665 kPa/m')
     t3 = pd.DataFrame(st.session_state.get('trechos', {}))
     if t3.empty:
         st.info('Cadastre trechos e atribua L_eq na aba 2.')
@@ -225,17 +233,24 @@ with tab3:
         t3 = t3.copy()
         # Q provável (L/s)
         t3['Q (L/s)'] = _num(0, 0) + (k_uc * (t3['peso_trecho'] ** exp_uc))
-
-        # Gradiente J (m/m) e em kPa/m
-        def J_kPa(rr):
+        # Gradiente J (kPa/m)
+        def _J_kPa(rr):
             if modelo_perda == 'Hazen-Williams':
                 C = c_pvc if material_sistema=='PVC' else c_fofo
-                j_m = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
-                return j_m * KPA_PER_M
+                j_mm = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
+                return j_mm * KPA_PER_M
             else:
                 return j_fair_whipple_hsiao_kPa_per_m(rr['Q (L/s)'], rr['dn_mm'], material_sistema)
-        t3['J (kPa/m)'] = t3.apply(J_kPa, axis=1)
-        t3['J (m/m)'] = t3['J (kPa/m)'] / KPA_PER_M
+        t3['J (kPa/m)'] = t3.apply(_J_kPa, axis=1)
+        t3['J (m/m)']   = t3['J (kPa/m)'] / KPA_PER_M
+        import math
+        def _vel(rr):
+            Q = max(0.0, _num(rr['Q (L/s)'],0.0)) / 1000.0
+            D = max(0.0, _num(rr['dn_mm'],0.0)) / 1000.0
+            if D <= 0 or Q <= 0: return 0.0
+            A = math.pi * D*D / 4.0
+            return Q / A
+        t3['v (m/s)'] = t3.apply(_vel, axis=1)
 
         # Opção de ordenação (padrão = manter a ordem de cadastro dos trechos)
         ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False, help='Quando desligado, os resultados seguem a mesma ordem mostrada em "Trechos".')
@@ -251,22 +266,22 @@ with tab3:
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
                 hf_loc  = J_kPa_m * _num(r['leq_m'])
-                hf_alt  = -KPA_PER_M * _num(r.get('dz_io_m', r.get('delta_z_m', 0.0)))  # dz_io_m = z_inicial - z_final (desce>0, sobe<0); hf_alt = -ρg·dz_io
-                P_out   = P_in - (hf_cont + hf_loc + hf_alt)
+                p_disp  = KPA_PER_M * _num(r.get('dz_io_m', 0.0))
+                p_out   = p_in + p_disp - hf_cont - hf_loc
                 row = r.to_dict()
                 row.update({
-                    'P_in (kPa)': P_in,
+                    'p_in (kPa)': p_in,
                     'hf_cont (kPa)': hf_cont,
                     'hf_loc (kPa)': hf_loc,
-                    'hf_alt (kPa)': hf_alt,
-                    'P_out (kPa)': P_out,
+                    'p_disp (kPa)': p_disp,
+                    'p_out (kPa)': p_out,
                 })
                 results.append(row)
                 P_in = P_out  # próximo trecho inicia com a pressão de saída deste
         t_out = pd.DataFrame(results)
 
         show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',
-                     'peso_trecho','leq_m','Q (L/s)','J (kPa/m)',
+                     'peso_trecho','leq_m','Q (L/s)','v (m/s)','J (kPa/m)',
                      'P_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_alt (kPa)','P_out (kPa)']
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
 
