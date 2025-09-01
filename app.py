@@ -5,6 +5,16 @@
 
 
 import streamlit as st
+
+def _st_rerun():
+    # Compat: Streamlit >=1.30 uses _st_rerun(); em versões antigas existe _st_rerun()
+    if hasattr(st, 'rerun'):
+        _st_rerun()
+    elif hasattr(st, 'experimental_rerun'):
+        _st_rerun()
+    else:
+        pass
+
 import pandas as pd
 import json
 from pathlib import Path
@@ -218,7 +228,7 @@ if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.
                 if all(c in t_new.columns for c in ['ramo','ordem']):
                     t_new['ordem'] = t_new.groupby('ramo').cumcount()+1
                 st.session_state['trechos'] = t_new
-                st.experimental_rerun()
+                _st_rerun()
         with cols[1]:
             if st.button('⬆️ Subir', key=f"up_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
                 if all(c in tman.columns for c in ['ramo','ordem']):
@@ -230,7 +240,7 @@ if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.
                         tman.loc[i2,'ordem'] = ordem_v
                         t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
                         st.session_state['trechos'] = t_new
-                        st.experimental_rerun()
+                        _st_rerun()
         with cols[2]:
             if st.button('⬇️ Descer', key=f"down_{r.name}_{r.get('ramo','')}_{r.get('ordem','')}"):
                 if all(c in tman.columns for c in ['ramo','ordem']):
@@ -243,7 +253,7 @@ if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.
                         tman.loc[i2,'ordem'] = ordem_v
                         t_new = tman.sort_values(['ramo','ordem']).reset_index(drop=True)
                         st.session_state['trechos'] = t_new
-                        st.experimental_rerun()
+                        _st_rerun()
         with cols[3]:
             pass
 else:
