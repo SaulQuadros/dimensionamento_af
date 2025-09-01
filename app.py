@@ -1,4 +1,10 @@
-import streamlit as st
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[ ]:
+
+
+mport streamlit as st
 import pandas as pd
 import json
 from pathlib import Path
@@ -116,7 +122,7 @@ with st.sidebar:
     c_fofo = st.number_input('C (Ferro Fundido)', value=130.0, step=5.0)
     # Reservatório: Hmax / Hmin e nível de operação
     st.markdown('**Nível do Reservatório (m)**')
-    H_max = st.number_input('H_max (espelho d'água no nível cheio)', value=25.0, step=0.5)
+    H_max = st.number_input("H_max (espelho d\'água no nível cheio)", value=25.0, step=0.5)
     H_min = st.number_input('H_min (mínimo com água no ponto)', value=0.0, step=0.5)
     frac = st.slider('Nível operacional (0 = H_min, 1 = H_max)', 0.0, 1.0, value=1.0)
     H_res = H_min + frac * (H_max - H_min)
@@ -267,3 +273,4 @@ with tab3:
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
+
