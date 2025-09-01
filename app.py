@@ -277,7 +277,7 @@ with tab3:
         # Propagação por ramo: P_in -> perdas -> P_out, preservando a ordem atual da tabela
         results = []
         for ramo, grp in t3.groupby('ramo', sort=False):
-            P_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
+            p_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
             for _, r in grp.iterrows():
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
@@ -285,6 +285,8 @@ with tab3:
                 p_disp  = KPA_PER_M * _num(r.get('dz_io_m', 0.0))
                 p_out   = p_in + p_disp - hf_cont - hf_loc
                 row = r.to_dict()
+                # advance for next trecho in the same ramo
+                next_p_in = p_out
                 row.update({
                     'p_in (kPa)': p_in,
                     'hf_cont (kPa)': hf_cont,
@@ -293,12 +295,13 @@ with tab3:
                     'p_out (kPa)': p_out,
                 })
                 results.append(row)
-                P_in = P_out  # próximo trecho inicia com a pressão de saída deste
+                p_in = next_p_in
+                p_in = P_out  # próximo trecho inicia com a pressão de saída deste
         t_out = pd.DataFrame(results)
 
         show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',
                      'peso_trecho','leq_m','Q (L/s)','v (m/s)','J (kPa/m)',
-                     'P_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_alt (kPa)','P_out (kPa)']
+                     'p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_alt (kPa)','p_out (kPa)']
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
 
         # Export JSON com parâmetros + tabela final
