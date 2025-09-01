@@ -35,8 +35,8 @@ def trecho_label(r):
 # ----------------- Tables -----------------
 def load_tables():
     base = Path(__file__).parent
-    pvc = pd.read_csv(base / 'pvc_perda_local_equivalente.csv')
-    fofo = pd.read_csv(base / 'fofo_perda_local_equivalente.csv')
+    pvc = pd.read_csv(base / 'data/pvc_pl_eqlen.csv')
+    fofo = pd.read_csv(base / 'data/fofo_pl_eqlen.csv')
     return pvc, fofo
 
 def get_dn_series(table):
@@ -83,11 +83,19 @@ def j_hazen_williams(Q_Ls, D_mm, C):
     if D <= 0.0 or C <= 0.0: return 0.0
     return 10.67 * (Q ** 1.852) / ( (C ** 1.852) * (D ** 4.87) )
 
-def j_fair_whipple_hsiao(Q_Ls, D_mm):
-    # Provided form, already for Q in L/s and D in mm ; J in m/m
+def j_fair_whipple_hsiao_kPa_per_m(Q_Ls, D_mm, material: str):
+    # Fair–Whipple–Hsiao in kPa/m (Q in L/s, D in mm)
     Q = max(0.0, _num(Q_Ls, 0.0))
     D = max(0.0, _num(D_mm, 0.0))
-    if D <= 0.0: return 0.0
+    if D <= 0.0:
+        return 0.0
+    mat = (material or '').strip().lower()
+    if mat == 'pvc':
+        # PVC: 8.695e6 * Q^1.75 / D^4.75  -> J in kPa/m
+        return 8.695e6 * (Q ** 1.75) / (D ** 4.75)
+    else:
+        # FoFo (ferro fundido) padrão: 20.2e6 * Q^1.88 / D^4.88  -> J in kPa/m
+        return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
     return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
 
 # ----------------- App -----------------
@@ -96,10 +104,10 @@ st.title('Dimensionamento – Barrilete e Colunas (kPa • Hazen-Williams / Fair
 
 pvc_table, fofo_table = load_tables()
 
-BASE_COLS = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','delta_z_m','peso_trecho','leq_m']
+BASE_COLS = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m']
 DTYPES = {'id':'string','ramo':'string','ordem':'Int64','de_no':'string','para_no':'string',
           'dn_mm':'float','de_ref_mm':'float','pol_ref':'string',
-          'comp_real_m':'float','delta_z_m':'float','peso_trecho':'float','leq_m':'float'}
+          'comp_real_m':'float','dz_io_m':'float','peso_trecho':'float','leq_m':'float'}
 
 with st.sidebar:
     st.header('Parâmetros Globais')
@@ -142,7 +150,7 @@ with tab1:
         c6,c7,c8 = st.columns(3)
         dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
-        delta_z_m = c8.number_input('delta_z_m (m)', step=0.1, value=0.0, format='%.2f')
+        dz_io_m = c8.number_input("dz_io_m (m) [z_inicial - z_final]", step=0.1, value=0.0, format='%.2f')
         peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
         ok = st.form_submit_button('➕ Adicionar trecho', disabled=(material_sistema=='(selecione)'))
     if ok:
@@ -151,7 +159,7 @@ with tab1:
         base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
         nova = {'id':id_val,'ramo':ramo,'ordem':int(ordem),'de_no':de_no,'para_no':para_no,
                 'dn_mm':float(dn_mm),'de_ref_mm':float(de_ref_mm),'pol_ref':pol_ref,
-                'comp_real_m':float(comp_real_m),'delta_z_m':float(delta_z_m),
+                'comp_real_m':float(comp_real_m),'dz_io_m':float(dz_io_m),
                 'peso_trecho':float(peso_trecho),'leq_m':0.0}
         base = pd.concat([base, pd.DataFrame([nova])], ignore_index=True)
         for c,t in DTYPES.items():
@@ -218,14 +226,15 @@ with tab3:
         t3['Q (L/s)'] = _num(0, 0) + (k_uc * (t3['peso_trecho'] ** exp_uc))
 
         # Gradiente J (m/m) e em kPa/m
-        def J_m(rr):
+        def J_kPa(rr):
             if modelo_perda == 'Hazen-Williams':
                 C = c_pvc if material_sistema=='PVC' else c_fofo
-                return j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
+                j_m = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)
+                return j_m * KPA_PER_M
             else:
-                return j_fair_whipple_hsiao(rr['Q (L/s)'], rr['dn_mm'])
-        t3['J (m/m)'] = t3.apply(J_m, axis=1)
-        t3['J (kPa/m)'] = t3['J (m/m)'] * KPA_PER_M
+                return j_fair_whipple_hsiao_kPa_per_m(rr['Q (L/s)'], rr['dn_mm'], material_sistema)
+        t3['J (kPa/m)'] = t3.apply(J_kPa, axis=1)
+        t3['J (m/m)'] = t3['J (kPa/m)'] / KPA_PER_M
 
         # Opção de ordenação (padrão = manter a ordem de cadastro dos trechos)
         ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False, help='Quando desligado, os resultados seguem a mesma ordem mostrada em "Trechos".')
@@ -241,7 +250,7 @@ with tab3:
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
                 hf_loc  = J_kPa_m * _num(r['leq_m'])
-                hf_alt  = KPA_PER_M * _num(r['delta_z_m'])  # sobe (Δz>0) -> perde
+                hf_alt  = -KPA_PER_M * _num(r.get('dz_io_m', r.get('delta_z_m', 0.0)))  # dz_io_m = z_inicial - z_final (desce>0, sobe<0); hf_alt = -ρg·dz_io
                 P_out   = P_in - (hf_cont + hf_loc + hf_alt)
                 row = r.to_dict()
                 row.update({
@@ -255,7 +264,7 @@ with tab3:
                 P_in = P_out  # próximo trecho inicia com a pressão de saída deste
         t_out = pd.DataFrame(results)
 
-        show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','delta_z_m',
+        show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',
                      'peso_trecho','leq_m','Q (L/s)','J (kPa/m)',
                      'P_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','hf_alt (kPa)','P_out (kPa)']
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
