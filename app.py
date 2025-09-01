@@ -225,7 +225,7 @@ with tab2:
                 '(m)': st.column_config.NumberColumn(disabled=True, format='%.2f'),
                 '(Qt.)': st.column_config.NumberColumn(min_value=0, step=1)
             },
-            key=f'eq_editor_{sel}'
+            key=f'eq_editor_{mat_key}_{sel}'
         )
         if st.button('Aplicar L_eq ao trecho selecionado'):
             dfe = pd.DataFrame(edited)
