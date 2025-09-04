@@ -89,13 +89,41 @@ def _norm_tipo(x:str)->str:
     return s
 
 # =========================
+# Notação dos nós (A..Z, AA.. / 1..N)
+# =========================
+
+def excel_next_label(lbl: str) -> str:
+    """Próximo rótulo estilo Excel (A..Z, AA..AZ, BA..)."""
+    s = (lbl or '').strip().upper()
+    if s == '': return 'A'
+    if not re.fullmatch(r'[A-Z]+', s): s = 'A'
+    chars = list(s); i = len(chars) - 1; carry = True
+    while i >= 0 and carry:
+        if chars[i] == 'Z':
+            chars[i] = 'A'; i -= 1
+        else:
+            chars[i] = chr(ord(chars[i]) + 1); carry = False
+    if carry: chars = ['A'] + chars
+    return ''.join(chars)
+
+def normalize_label(value: str, mode: str) -> str:
+    """Limpa/valida rótulos conforme o modo escolhido (Letras ou Números)."""
+    if mode.startswith('Letras'):
+        v = (value or '').strip().upper()
+        if not re.fullmatch(r'[A-Z]+', v):
+            raise ValueError('Use apenas letras maiúsculas (A–Z, AA, AB, ...).')
+        return v
+    else:  # 'Números (1, 2, 3, ...)'
+        v = (value or '').strip()
+        if not re.fullmatch(r'[0-9]+', v):
+            raise ValueError('Use apenas dígitos (0–9).')
+        return str(int(v))  # remove zeros à esquerda (mantém "0" se for zero)
+
+# =========================
 # Modelos de perda de carga (J)
 # =========================
 def j_hazen_williams(Q_Ls: float, D_mm: float, C: float) -> float:
-    """
-    Hazen-Williams (J em m/m).
-    Q em L/s -> m³/s ; D em mm -> m.
-    """
+    """Hazen-Williams (J em m/m). Q em L/s -> m³/s ; D em mm -> m."""
     Q = max(0.0, _num(Q_Ls, 0.0)) / 1000.0
     D = max(0.0, _num(D_mm, 0.0)) / 1000.0
     C = max(0.0, _num(C, 0.0))
@@ -104,9 +132,7 @@ def j_hazen_williams(Q_Ls: float, D_mm: float, C: float) -> float:
     return 10.67 * (Q ** 1.852) / ((C ** 1.852) * (D ** 4.87))
 
 def j_fair_whipple_hsiao_kPa_per_m(Q_Ls: float, D_mm: float, material: str) -> float:
-    """
-    Fair-Whipple-Hsiao (forma prática, devolve J em kPa/m diretamente).
-    """
+    """Fair-Whipple-Hsiao (aprox prática, devolve J em kPa/m)."""
     Q = max(0.0, _num(Q_Ls, 0.0))
     D = max(0.0, _num(D_mm, 0.0))
     if D <= 0.0 or Q <= 0.0:
@@ -121,23 +147,19 @@ def j_fair_whipple_hsiao_kPa_per_m(Q_Ls: float, D_mm: float, material: str) -> f
 # Tabelas de L_eq (seguras)
 # =========================
 def safe_load_tables():
-    pvc = pd.DataFrame()
-    fofo = pd.DataFrame()
+    pvc = pd.DataFrame(); fofo = pd.DataFrame()
     try:
         base = Path(__file__).parent
         pvc = pd.read_csv(base / 'data/pvc_pl_eqlen.csv')
-    except Exception:
-        pass
+    except Exception: pass
     try:
         base = Path(__file__).parent
         fofo = pd.read_csv(base / 'data/fofo_pl_eqlen.csv')
-    except Exception:
-        pass
+    except Exception: pass
     return pvc, fofo
 
 def get_dn_series(table):
-    if table.empty:
-        return None, None
+    if table.empty: return None, None
     for nm in table.columns:
         low = nm.lower()
         if ('de' in low or 'dn' in low or 'diam' in low) and 'mm' in low:
@@ -145,8 +167,7 @@ def get_dn_series(table):
     return table.iloc[:, 0], table.columns[0]
 
 def piece_columns_for(table):
-    if table.empty:
-        return [], None
+    if table.empty: return [], None
     dn_series, dn_name = get_dn_series(table)
     cols = [c for c in table.columns if c not in (dn_name, 'dref_pol')]
     return cols, dn_name
@@ -468,16 +489,16 @@ with tab2:
 
 # ---------------- TAB 3: Resultados ----------------
 with tab3:
-    st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no ponto A')
-    st.caption('Fórmula: p_out = p_in + γ·(z_inicial − z_final) − h_f_cont − h_f_loc, onde γ = 9,80665 kPa/m')
+    st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no nó de origem do ramo')
+    st.caption('p_out = p_in + γ·(z_inicial − z_final) − h_f_cont − h_f_loc, com γ = 9,80665 kPa/m')
     base = pd.DataFrame(st.session_state['trechos']).copy()
     if base.empty:
         st.info('Cadastre trechos e atribua L_eq na aba 2.')
     else:
-        # 1) Vazão provável (L/s) a partir do Peso (UC)
+        # Vazão provável (L/s) a partir do Peso (UC)
         base['Q (L/s)'] = (k_val * (base['peso_trecho'] ** exp_val)).astype(float)
 
-        # 2) Gradiente J (kPa/m) e (m/m)
+        # Gradiente J (kPa/m) e (m/m)
         def _J_kPa(rr):
             if modelo_perda == 'Hazen-Williams':
                 C = c_pvc if material_sistema == 'PVC' else c_fofo
@@ -489,7 +510,7 @@ with tab3:
         base['J (kPa/m)'] = base.apply(_J_kPa, axis=1)
         base['J (m/m)']   = base['J (kPa/m)'] / KPA_PER_M
 
-        # 3) Velocidade v (m/s)
+        # Velocidade v (m/s)
         def _vel(rr):
             Q = max(0.0, _num(rr['Q (L/s)'],0.0)) / 1000.0
             D = max(0.0, _num(rr['dn_mm'],0.0)) / 1000.0
@@ -498,12 +519,11 @@ with tab3:
             return Q / A
         base['v (m/s)'] = base.apply(_vel, axis=1)
 
-        # 4) Ordenação opcional
         ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False)
         if ordenar and {'ramo','ordem'} <= set(base.columns):
             base = base.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
 
-        # 5) Propagação p_in -> p_out por ramo, partindo de p_in = H_oper * γ
+        # Propagação p_in -> p_out por ramo, partindo de p_in = H_oper * γ
         resultados = []
         for ramo_val, grp in base.groupby('ramo', sort=False):
             p_in = h_oper * KPA_PER_M
@@ -526,7 +546,6 @@ with tab3:
 
         t_out = pd.DataFrame(resultados)
 
-        # 6) Colunas para exibir (inclui tipo_ini se existir)
         base_cols_show = [
             'id','ramo','ordem','tipo_ini','de_no','para_no','dn_mm','de_ref_mm',
             'pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m',
@@ -535,7 +554,6 @@ with tab3:
         show_cols = [c for c in base_cols_show if c in t_out.columns]
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
 
-        # 7) Export JSON (parâmetros + resultados)
         params = {
             'projeto': projeto_nome,
             'material': material_sistema,
