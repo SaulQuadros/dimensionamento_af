@@ -1,6 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# In[ ]:
+
+
+#!/usr/bin/env python
+# coding: utf-8
+
 import re
 import uuid
 from pathlib import Path
@@ -8,8 +14,9 @@ import json
 import unicodedata
 import pandas as pd
 import streamlit as st
+from datetime import datetime
 
-VERSION_STAMP = "build 2025-09-04 15:50:23 – tipo_ini full-width"
+VERSION_STAMP = datetime.now().strftime("build %Y-%m-%d %H:%M:%S") + " – regras fixas (Entrada=1, Tê=2, Cruzeta=3)"
 
 # =========================
 # Helpers & constants
@@ -71,18 +78,24 @@ def _ensure_session_df():
         st.session_state['trechos'] = df[BASE_COLS]
 
 def _norm_tipo(x:str)->str:
+    """Normaliza 'tipo_ini' para comparação robusta (te/tê, entrada de água, cruzeta)."""
     s = _s(x).lower().strip()
-    s = ''.join(ch for ch in unicodedata.normalize('NFD', s) if unicodedata.category(ch) != 'Mn')
+    s = ''.join(ch for ch in unicodedata.normalize('NFD', s) if unicodedata.category(ch) != 'Mn')  # remove acentos
     s = s.replace(' ', '')
     if 'entrada' in s:
         return 'entrada'
     if 'cruzeta' in s:
         return 'cruzeta'
-    if 'te' in s:
+    if 'te' in s:  # cobre 'tê' e 'te'
         return 'te'
     return s
 
+# =========================
+# Notação dos nós (A..Z, AA.. / 1..N)
+# =========================
+
 def excel_next_label(lbl: str) -> str:
+    """Próximo rótulo estilo Excel (A..Z, AA..AZ, BA..)."""
     s = (lbl or '').strip().upper()
     if s == '': return 'A'
     if not re.fullmatch(r'[A-Z]+', s): s = 'A'
@@ -100,16 +113,21 @@ def excel_next_label(lbl: str) -> str:
     return ''.join(chars)
 
 def normalize_label(value: str, mode: str) -> str:
+    """Limpa/valida rótulos conforme o modo escolhido."""
     if mode == 'Letras (A, B, ..., Z, AA, AB, ...)':
         v = (value or '').strip().upper()
         if not re.fullmatch(r'[A-Z]+', v):
             raise ValueError('Use apenas letras maiúsculas (A–Z, AA, AB, ...).')
         return v
-    else:
+    else:  # 'Números (1, 2, 3, ...)'
         v = (value or '').strip()
         if not re.fullmatch(r'[0-9]+', v):
             raise ValueError('Use apenas dígitos (0–9).')
-        return str(int(v))
+        return str(int(v))  # remove zeros à esquerda (mantém "0" se for zero)
+
+# =========================
+# Tabelas de L_eq (seguras)
+# =========================
 
 def safe_load_tables():
     pvc = pd.DataFrame()
@@ -159,6 +177,10 @@ def pretty(name: str):
     name = name.replace(' de ', ' DE ').replace(' mm', ' (mm)')
     return name
 
+# =========================
+# App
+# =========================
+
 st.set_page_config(page_title='SPAF – Regras de Trechos (ramais, Tês, cruzetas)', layout='wide')
 st.title('SPAF – Barriletes e Colunas • Regras de Trechos (ramais, Tê, Cruzeta, Entrada)')
 st.caption(VERSION_STAMP)
@@ -166,49 +188,75 @@ st.caption(VERSION_STAMP)
 pvc_table, fofo_table = safe_load_tables()
 _ensure_session_df()
 
+# Sidebar
 with st.sidebar:
     st.header('Parâmetros Globais')
     projeto_nome = st.text_input('Nome do Projeto', 'Projeto Genérico')
     material_sistema = st.selectbox('Material do Sistema', ['(selecione)','PVC','FoFo'], index=0)
-    modelo_perda = st.selectbox('Modelo de perda de carga', ['Hazen-Williams','Fair-Whipple-Hsiao'], index=0)
+
+    st.markdown('---')
+    st.subheader('Modelo de perda contínua')
+    modelo_perda = st.radio('Escolha o modelo', ['Hazen-Williams','Fair-Whipple-Hsiao'], index=0)
+
+    st.markdown('---')
+    st.subheader('Conversão de Peso (UC) → Vazão')
+    st.caption('Q = k · Peso^exp')
+    k_val  = st.number_input('k (Q = k·Peso^exp)',    min_value=0.0, step=0.01, value=0.30, format='%.2f')
+    exp_val= st.number_input('exp (Q = k·Peso^exp)',  min_value=0.0, step=0.05, value=0.50, format='%.2f')
+
+    if modelo_perda == 'Hazen-Williams':
+        st.markdown('---')
+        st.subheader('Coeficientes Hazen-Williams')
+        c_pvc  = st.number_input('C (PVC)',           min_value=1.0, step=1.0, value=150.0, format='%.0f')
+        c_fofo = st.number_input('C (Ferro Fundido)', min_value=1.0, step=1.0, value=130.0, format='%.0f')
+    else:
+        c_pvc, c_fofo = None, None
+
+    st.markdown('---')
+    st.subheader('Nível do Reservatório (m)')
+    h_max = st.number_input("H_max (espelho d'água no nível cheio)", value=25.00, step=0.25, format='%.2f')
+    h_min = st.number_input('H_min (mínimo com água no ponto)',      value=0.00, step=0.25, format='%.2f')
+    nivel_operacional = st.slider('Nível operacional (0 = H_min, 1 = H_max)', min_value=0.0, max_value=1.0, value=1.00, step=0.01)
+    h_oper = h_min + nivel_operacional * (h_max - h_min)
+
     st.markdown('---')
     st.subheader('Notação dos nós (início/fim)')
     notacao_mode = st.radio('Modo de notação', ['Letras (A, B, ..., Z, AA, AB, ...)', 'Números (1, 2, 3, ...)'], index=0)
     st.caption('A validação do app garante que os nós respeitem o modo escolhido.')
+
     st.markdown('---')
-    st.subheader('Capacidade por tipo de conexão (saídas permitidas)')
-    cap_ent = st.number_input('Entrada de água – máx. saídas', min_value=1, max_value=10, value=1, step=1)
-    cap_te  = st.number_input('Tê – máx. saídas', min_value=1, max_value=10, value=2, step=1)
-    cap_crz = st.number_input('Cruzeta – máx. saídas', min_value=1, max_value=10, value=3, step=1)
-    st.caption('A lógica do app impede exceder essas capacidades por nó de início.')
+    st.caption('Regras FÍSICAS FIXAS: Entrada=1 saída; Tê=2 saídas; Cruzeta=3 saídas.')
 
 tab1, tab2, tab3 = st.tabs(['Trechos', 'L_eq por DN (referencial)', 'Resultados'])
 
+# ---------------- TAB 1: Cadastro ----------------
 with tab1:
     st.subheader('Cadastrar trechos')
     with st.form('frm_add'):
+        # Linha 1 – identificação
         c1,c2,c3 = st.columns([1.2,1,1])
         id_val = c1.text_input('id (opcional)')
         ramo = c2.text_input('ramo', value='A')
         ordem = c3.number_input('ordem', min_value=1, step=1, value=1)
 
-        # Selectbox full-width (independente do material)
+        # Linha exclusiva — tipo da conexão no início
         st.markdown('### Tipo da conexão no INÍCIO')
-        tipo_ini = st.selectbox(
-            'Escolha o tipo do ponto inicial:',
-            ['Entrada de Água','Tê','Cruzeta'],
-            key='tipo_ini_fullwidth'
-        )
+        tipo_ini = st.selectbox('Escolha o tipo do ponto inicial:', ['Entrada de Água','Tê','Cruzeta'], key='tipo_ini_fullwidth')
 
+        # Linha 2 – início e fim
         c5, c6 = st.columns([1, 1])
-        de_no_raw = c5.text_input('de_no (início)', value='A' if notacao_mode.startswith('Let') else '1')
-        para_no_raw = c6.text_input('para_no (fim)', value='B' if notacao_mode.startswith('Let') else '2')
+        de_no_default   = 'A' if notacao_mode.startswith('Let') else '1'
+        para_no_default = 'B' if notacao_mode.startswith('Let') else '2'
+        de_no_raw   = c5.text_input('de_no (início)', value=de_no_default)
+        para_no_raw = c6.text_input('para_no (fim)',  value=para_no_default)
 
+        # Linha 3 – DN, comprimento, desnível
         c7,c8,c9 = st.columns(3)
         dn_mm = c7.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
         comp_real_m = c8.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
         dz_io_m = c9.number_input("dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)", step=0.1, value=0.0, format="%.2f")
 
+        # Linha 4 – peso e ponto final (mín. de pressão)
         c10,c11 = st.columns([1,1])
         peso_trecho = c10.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
         tipo_ponto = c11.selectbox('Tipo no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
@@ -218,50 +266,59 @@ with tab1:
         ok = st.form_submit_button("➕ Adicionar trecho", disabled=(material_sistema == "(selecione)"))
 
         if ok:
+            # 1) Notação
             try:
                 de_no = normalize_label(de_no_raw, notacao_mode)
                 para_no = normalize_label(para_no_raw, notacao_mode)
             except ValueError as e:
-                st.error(f'Erro na notação dos nós: {e}'); st.stop()
+                st.error(f'Erro na notação dos nós: {e}')
+                st.stop()
             if de_no == para_no:
-                st.error('Início e fim do trecho não podem ser iguais.'); st.stop()
+                st.error('Início e fim do trecho não podem ser iguais.')
+                st.stop()
 
+            # 2) Duplicidade global (de_no + para_no) — independente do ramo
             df = pd.DataFrame(st.session_state['trechos']).copy()
-
-            # Duplicidade global (de_no + para_no) — independente do ramo
             if not df.empty and {'de_no','para_no'} <= set(df.columns):
                 dup = df[(df['de_no'].astype(str)==de_no) & (df['para_no'].astype(str)==para_no)]
                 if not dup.empty:
-                    st.error(f'Já existe um trecho {de_no} → {para_no}.'); st.stop()
+                    st.error(f'Já existe um trecho {de_no} → {para_no}.')
+                    st.stop()
 
-            # Limite de saídas por nó de início + consistência do tipo
+            # 3) Regras FÍSICAS FIXAS de saídas por nó de início + consistência do tipo
+            cap_map = {'entrada': 1, 'te': 2, 'cruzeta': 3}
+            tipo_sel_norm = _norm_tipo(tipo_ini)
+
             count_out = 0
             if not df.empty and {'de_no','tipo_ini'} <= set(df.columns):
                 subset = df[df['de_no'].astype(str)==de_no]
                 if not subset.empty:
                     tipos_exist_norm = set(_norm_tipo(x) for x in subset['tipo_ini'].tolist())
-                    tipo_sel_norm = _norm_tipo(tipo_ini)
                     if len(tipos_exist_norm) > 1 and tipo_sel_norm not in tipos_exist_norm:
-                        st.error('O nó de início já foi cadastrado com tipos diferentes. Padronize o tipo.'); st.stop()
+                        st.error('O nó de início já foi cadastrado com tipos diferentes. Padronize o tipo.')
+                        st.stop()
                     if len(tipos_exist_norm) == 1 and tipo_sel_norm not in tipos_exist_norm:
-                        st.error(f'O nó "{de_no}" já está definido como "{list(subset["tipo_ini"].unique())[0]}".'); st.stop()
+                        st.error(f'O nó "{de_no}" já está definido como "{list(subset["tipo_ini"].unique())[0]}".')
+                        st.stop()
                     count_out = len(subset)
-            cap_map = {'entrada': int(locals().get('cap_ent', 1)),
-                       'te': int(locals().get('cap_te', 2)),
-                       'cruzeta': int(locals().get('cap_crz', 3))}
-            cap_allowed = cap_map.get(_norm_tipo(tipo_ini), 2)
-            if count_out >= cap_allowed:
-                st.error(f'O nó de início "{de_no}" ({tipo_ini}) já atingiu o limite de {cap_allowed} saída(s).'); st.stop()
 
+            cap_allowed = cap_map.get(tipo_sel_norm, 2)
+            if count_out >= cap_allowed:
+                st.error(f'O nó de início "{de_no}" ({tipo_ini}) já atingiu o limite de {cap_allowed} saída(s).')
+                st.stop()
+
+            # 4) Monta nova linha (ID único)
             base_exist = pd.DataFrame(st.session_state['trechos'])
-            existing_ids = set(base_exist.get('id', pd.Series([], dtype=str)).astype(str).fillna('').str.strip().tolist())
+            existing_ids = set(
+                base_exist.get('id', pd.Series([], dtype=str)).astype(str).fillna('').str.strip().tolist()
+            )
             raw_id = (id_val or '').strip()
             if (not raw_id) or (raw_id in existing_ids):
                 base_tag = raw_id if raw_id else 'row'
                 raw_id = f"{base_tag}_{uuid.uuid4().hex[:6]}"
 
-            mat_key = 'FoFo' if isinstance(material_sistema,str) and material_sistema.strip().lower()=='fofo' else 'PVC'
-            table_mat = pvc_table if mat_key=='PVC' else fofo_table
+            # L_eq de referência (se tabelas existirem)
+            table_mat = pvc_table if (str(material_sistema).strip().lower()=='pvc') else fofo_table
             _, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
 
             nova = {
@@ -282,6 +339,7 @@ with tab1:
     vis_cols = [c for c in BASE_COLS if c!='leq_m']
     st.dataframe(pd.DataFrame(st.session_state['trechos'])[vis_cols], use_container_width=True, height=360)
 
+# ---------------- Gerenciar trechos ----------------
 st.subheader('Gerenciar trechos')
 
 def _move_row_action(row_id, ramo_val, direction):
@@ -374,6 +432,7 @@ if not df_view.empty:
 else:
     st.info('Nenhum trecho cadastrado ainda.')
 
+# ---------------- TAB 2: L_eq (referencial) ----------------
 with tab2:
     st.subheader('Comprimento Equivalente — editar por trecho (baseado no DN **referencial**)')
     base = pd.DataFrame(st.session_state['trechos'])
@@ -382,7 +441,7 @@ with tab2:
     elif material_sistema == '(selecione)':
         st.warning('Selecione o Material do Sistema na barra lateral.')
     else:
-        table_mat = pvc_table if (isinstance(material_sistema,str) and material_sistema.strip().lower()=='pvc') else fofo_table
+        table_mat = pvc_table if (str(material_sistema).strip().lower()=='pvc') else fofo_table
         piece_cols, dn_name = piece_columns_for(table_mat)
         sel = st.selectbox('Selecione o trecho', [trecho_label(r) for _, r in base.iterrows()])
         if sel:
@@ -416,6 +475,7 @@ with tab2:
                 st.session_state['trechos'].loc[idx_sel, 'leq_m'] = leq_total
                 st.success(f'L_eq total para o trecho selecionado: {leq_total:.2f} m')
 
+# ---------------- TAB 3: Resultados ----------------
 with tab3:
     st.subheader('Resultados')
     base = pd.DataFrame(st.session_state['trechos']).copy()
@@ -427,11 +487,15 @@ with tab3:
             'projeto': projeto_nome,
             'material': material_sistema,
             'modelo_perda': modelo_perda,
+            'Q_from_Peso': {'k': k_val, 'exp': exp_val},
+            'HW': ({'C_PVC': c_pvc, 'C_FoFo': c_fofo} if modelo_perda == 'Hazen-Williams' else None),
+            'reservatorio_m': {'H_max': h_max, 'H_min': h_min, 'nivel_operacional': nivel_operacional, 'H_oper': h_oper},
             'notacao': notacao_mode,
-            'capacidade': {'entrada': int(cap_ent), 'te': int(cap_te), 'cruzeta': int(cap_crz)}
+            'regras_fixas': {'entrada': 1, 'te': 2, 'cruzeta': 3}
         }
         show_cols = [c for c in BASE_COLS if c in base.columns]
         proj = {'params': params, 'trechos': base[show_cols].to_dict(orient='list')}
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
+
