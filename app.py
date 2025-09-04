@@ -17,7 +17,7 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 
-VERSION_STAMP = datetime.now().strftime("build %Y-%m-%d %H:%M:%S") + " – regras fixas (Entrada=1, Tê=2, Cruzeta=3) + Resultados OK"
+VERSION_STAMP = datetime.now().strftime("build %Y-%m-%d %H:%M:%S") + " – regras fixas (Entrada=1, Tê=2, Cruzeta=3) + Resultados + Alertas + Gráfico + p_in por ramo"
 
 # =========================
 # Helpers & constants
@@ -489,8 +489,9 @@ with tab2:
 
 # ---------------- TAB 3: Resultados ----------------
 with tab3:
-    st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no nó de origem do ramo')
+    st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial por ramo')
     st.caption('p_out = p_in + γ·(z_inicial − z_final) − h_f_cont − h_f_loc, com γ = 9,80665 kPa/m')
+
     base = pd.DataFrame(st.session_state['trechos']).copy()
     if base.empty:
         st.info('Cadastre trechos e atribua L_eq na aba 2.')
@@ -519,14 +520,34 @@ with tab3:
             return Q / A
         base['v (m/s)'] = base.apply(_vel, axis=1)
 
+        # Ordenação opcional
         ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False)
         if ordenar and {'ramo','ordem'} <= set(base.columns):
             base = base.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
 
-        # Propagação p_in -> p_out por ramo, partindo de p_in = H_oper * γ
+        # ===== Novo: p_in inicial por ramo =====
+        ramos = sorted(base['ramo'].dropna().astype(str).unique().tolist())
+        default_kpa = (h_oper * KPA_PER_M)
+        if 'p_in_inicial_kPa' not in st.session_state:
+            st.session_state['p_in_inicial_kPa'] = {}
+        pini_dict = st.session_state['p_in_inicial_kPa']
+
+        with st.expander('Condições iniciais por ramo (p_in no primeiro trecho)', expanded=False):
+            st.caption(f'Defina p_in (kPa) por ramo. Padrão: H_oper × γ = {default_kpa:.2f} kPa.')
+            for rv in ramos:
+                val = float(pini_dict.get(str(rv), default_kpa))
+                new_val = st.number_input(
+                    f'p_in inicial do ramo {rv} (kPa)',
+                    key=f'pini_{rv}',
+                    value=val, step=1.0, format='%.2f'
+                )
+                pini_dict[str(rv)] = float(new_val)
+        st.session_state['p_in_inicial_kPa'] = pini_dict
+
+        # Propagação p_in -> p_out por ramo, usando p_in inicial por ramo
         resultados = []
         for ramo_val, grp in base.groupby('ramo', sort=False):
-            p_in = h_oper * KPA_PER_M
+            p_in = float(st.session_state['p_in_inicial_kPa'].get(str(ramo_val), default_kpa))
             for _, r in grp.iterrows():
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
@@ -546,14 +567,47 @@ with tab3:
 
         t_out = pd.DataFrame(resultados)
 
+        # Status de pressão (OK x Abaixo)
+        t_out['status_pressao'] = t_out.apply(
+            lambda rr: '🟢 OK' if _num(rr.get('p_out (kPa)'), 0.0) >= _num(rr.get('p_min_ref_kPa'), 0.0) else '🔴 Abaixo',
+            axis=1
+        )
+
+        # Tabela principal
         base_cols_show = [
             'id','ramo','ordem','tipo_ini','de_no','para_no','dn_mm','de_ref_mm',
             'pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m',
-            'Q (L/s)','v (m/s)','J (kPa/m)','p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','p_disp (kPa)','p_out (kPa)'
+            'Q (L/s)','v (m/s)','J (kPa/m)','p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','p_disp (kPa)','p_out (kPa)','p_min_ref_kPa','status_pressao'
         ]
         show_cols = [c for c in base_cols_show if c in t_out.columns]
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
 
+        # ===== Novo: Alerta visual de violações =====
+        viol = t_out[_num(t_out['p_out (kPa)'], 0.0) < _num(t_out['p_min_ref_kPa'], 0.0)] if not t_out.empty else pd.DataFrame()
+        if not viol.empty:
+            st.error(f"{len(viol)} trecho(s) com pressão de saída abaixo do mínimo (p_out < p_min_ref_kPa).")
+            cols_viol = [c for c in ['ramo','ordem','de_no','para_no','p_out (kPa)','p_min_ref_kPa'] if c in viol.columns]
+            st.dataframe(viol[cols_viol], use_container_width=True)
+
+        # ===== Novo: Gráfico de pressão ao longo do ramo =====
+        st.markdown('---')
+        st.subheader('Gráfico: p_out e p_min_ref ao longo da ordem do ramo')
+        if ramos:
+            ramo_plot = st.selectbox('Escolha o ramo para o gráfico', ramos, index=0)
+            df_g = t_out[t_out['ramo'].astype(str) == str(ramo_plot)].copy()
+            if 'ordem' in df_g.columns:
+                df_g = df_g.sort_values('ordem')
+            if not df_g.empty:
+                df_plot = df_g[['ordem','p_out (kPa)','p_min_ref_kPa']].rename(
+                    columns={'ordem':'Ordem','p_out (kPa)':'p_out','p_min_ref_kPa':'p_min'}
+                ).set_index('Ordem')
+                st.line_chart(df_plot, use_container_width=True)
+            else:
+                st.info('Não há dados para o ramo selecionado.')
+        else:
+            st.info('Cadastre trechos para visualizar o gráfico.')
+
+        # Export JSON (parâmetros + resultados)
         params = {
             'projeto': projeto_nome,
             'material': material_sistema,
@@ -563,7 +617,8 @@ with tab3:
             'reservatorio_m': {'H_max': h_max, 'H_min': h_min, 'nivel_operacional': nivel_operacional, 'H_oper': h_oper},
             'notacao': notacao_mode,
             'regras_fixas': {'entrada': 1, 'te': 2, 'cruzeta': 3},
-            'KPA_PER_M': KPA_PER_M
+            'KPA_PER_M': KPA_PER_M,
+            'p_inicial_por_ramo_kPa': st.session_state.get('p_in_inicial_kPa', {})
         }
         proj = {'params': params, 'trechos': t_out[show_cols].to_dict(orient='list')}
         st.download_button('Baixar projeto (.json)',
