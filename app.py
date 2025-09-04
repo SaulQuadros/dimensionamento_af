@@ -4,25 +4,40 @@
 # In[ ]:
 
 
-import streamlit as st
+#!/usr/bin/env python
+# coding: utf-8
 
-def _st_rerun():
-    # Compat handler without recursion
-    if hasattr(st, 'rerun'):
-        st.rerun()
-    elif hasattr(st, 'experimental_rerun'):
-        st.experimental_rerun()
-    else:
-        return
-
-import pandas as pd
-import json
+import re
+import uuid
 from pathlib import Path
+import json
+import unicodedata
+import math
+import pandas as pd
+import streamlit as st
+from datetime import datetime
 
-# ----------------- Constants -----------------
+VERSION_STAMP = datetime.now().strftime("build %Y-%m-%d %H:%M:%S") + " – regras fixas (Entrada=1, Tê=2, Cruzeta=3) + Resultados OK"
+
+# =========================
+# Helpers & constants
+# =========================
+
 KPA_PER_M = 9.80665  # 1 m.c.a. ≈ 9.80665 kPa
 
-# ----------------- Small helpers -----------------
+# Colunas-base (inclui tipo da conexão no início do trecho)
+BASE_COLS = [
+    'id','ramo','ordem','tipo_ini','de_no','para_no',
+    'dn_mm','de_ref_mm','pol_ref',
+    'comp_real_m','dz_io_m','peso_trecho','leq_m','p_min_ref_kPa'
+]
+DTYPES = {
+    'id':'string','ramo':'string','ordem':'Int64','tipo_ini':'string',
+    'de_no':'string','para_no':'string',
+    'dn_mm':'float','de_ref_mm':'float','pol_ref':'string',
+    'comp_real_m':'float','dz_io_m':'float','peso_trecho':'float','leq_m':'float','p_min_ref_kPa':'float'
+}
+
 def _s(x):
     try:
         if pd.isna(x): return ''
@@ -45,56 +60,56 @@ def _i(x, default=0):
     except Exception: return default
 
 def trecho_label(r):
-    return f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] id={_s(r.get('id'))}"
+    return f"{_s(r.get('ramo'))}-{_i(r.get('ordem'))} [{_s(r.get('de_no'))}→{_s(r.get('para_no'))}] ({_s(r.get('tipo_ini'))}) id={_s(r.get('id'))}"
 
-# ----------------- Tables -----------------
-def load_tables():
-    base = Path(__file__).parent
-    pvc = pd.read_csv(base / 'data/pvc_pl_eqlen.csv')
-    fofo = pd.read_csv(base / 'data/fofo_pl_eqlen.csv')
-    return pvc, fofo
+def _st_rerun():
+    if hasattr(st, 'rerun'):
+        st.rerun()
+    elif hasattr(st, 'experimental_rerun'):
+        st.experimental_rerun()
 
-def get_dn_series(table):
-    for nm in table.columns:
-        low = nm.lower()
-        if ('de' in low or 'dn' in low or 'diam' in low) and 'mm' in low:
-            return table[nm], nm
-    return table.iloc[:, 0], table.columns[0]
+def _ensure_session_df():
+    if 'trechos' not in st.session_state or not isinstance(st.session_state['trechos'], pd.DataFrame):
+        st.session_state['trechos'] = pd.DataFrame(columns=BASE_COLS)
+    else:
+        df = st.session_state['trechos']
+        for c in BASE_COLS:
+            if c not in df.columns:
+                df[c] = pd.Series([None]*len(df))
+        st.session_state['trechos'] = df[BASE_COLS]
 
-def piece_columns_for(table):
-    dn_series, dn_name = get_dn_series(table)
-    cols = [c for c in table.columns if c not in (dn_name, 'dref_pol')]
-    return cols, dn_name
+def _norm_tipo(x:str)->str:
+    """Normaliza 'tipo_ini' para comparação robusta (te/tê, entrada de água, cruzeta)."""
+    s = _s(x).lower().strip()
+    s = ''.join(ch for ch in unicodedata.normalize('NFD', s) if unicodedata.category(ch) != 'Mn')  # remove acentos
+    s = s.replace(' ', '')
+    if 'entrada' in s: return 'entrada'
+    if 'cruzeta' in s: return 'cruzeta'
+    if 'te' in s: return 'te'
+    return s
 
-def lookup_row_by_mm(table, ref_mm):
-    dn_series, dn_name = get_dn_series(table)
-    try: x = float(ref_mm)
-    except Exception: x = 0.0
-    idx = (dn_series - x).abs().idxmin()
-    row = table.loc[idx]
-    de_ref_mm = float(row.get(dn_name, 0) or 0)
-    pol_ref = _s(row.get('dref_pol'))
-    return row.to_dict(), de_ref_mm, pol_ref
+# =========================
+# Modelos de perda de carga (J)
+# =========================
+def j_hazen_williams(Q_Ls: float, D_mm: float, C: float) -> float:
+    """
+    Hazen-Williams (J em m/m).
+    Q em L/s -> m³/s ; D em mm -> m.
+    """
+    Q = max(0.0, _num(Q_Ls, 0.0)) / 1000.0
+    D = max(0.0, _num(D_mm, 0.0)) / 1000.0
+    C = max(0.0, _num(C, 0.0))
+    if D <= 0.0 or C <= 0.0 or Q <= 0.0:
+        return 0.0
+    return 10.67 * (Q ** 1.852) / ((C ** 1.852) * (D ** 4.87))
 
-def pretty(col):
-    lbl = col
-    if lbl.endswith('_m'): lbl = lbl[:-2]
-    lbl = lbl.replace('_div_', '/').replace('_r_', ' R ')
-    lbl = lbl.replace('_', ' ').strip().title()
-    lbl = (lbl
-           .replace('Te', 'Tê')
-           .replace('Angulo', 'Ângulo')
-           .replace('Pe', 'Pé')
-           .replace('Canalizacao', 'Canalização')
-           .replace('Retencao', 'Retenção')
-    )
-    return lbl
-
-# ----------------- Headloss models -----------------
-def j_fair_whipple_hsiao_kPa_per_m(Q_Ls, D_mm, material: str):
+def j_fair_whipple_hsiao_kPa_per_m(Q_Ls: float, D_mm: float, material: str) -> float:
+    """
+    Fair-Whipple-Hsiao (forma prática, devolve J em kPa/m diretamente).
+    """
     Q = max(0.0, _num(Q_Ls, 0.0))
     D = max(0.0, _num(D_mm, 0.0))
-    if D <= 0.0:
+    if D <= 0.0 or Q <= 0.0:
         return 0.0
     mat = (material or '').strip().lower()
     if mat == 'pvc':
@@ -102,116 +117,227 @@ def j_fair_whipple_hsiao_kPa_per_m(Q_Ls, D_mm, material: str):
     else:
         return 20.2e6  * (Q ** 1.88) / (D ** 4.88)
 
-def j_hazen_williams(Q_Ls, D_mm, C):
-    # Q in L/s -> m3/s ; D in mm -> m ; J in m/m
-    Q = max(0.0, _num(Q_Ls, 0.0)) / 1000.0
-    D = max(0.0, _num(D_mm, 0.0)) / 1000.0
-    if D <= 0.0 or C <= 0.0: return 0.0
-    return 10.67 * (Q ** 1.852) / ( (C ** 1.852) * (D ** 4.87) )
+# =========================
+# Tabelas de L_eq (seguras)
+# =========================
+def safe_load_tables():
+    pvc = pd.DataFrame()
+    fofo = pd.DataFrame()
+    try:
+        base = Path(__file__).parent
+        pvc = pd.read_csv(base / 'data/pvc_pl_eqlen.csv')
+    except Exception:
+        pass
+    try:
+        base = Path(__file__).parent
+        fofo = pd.read_csv(base / 'data/fofo_pl_eqlen.csv')
+    except Exception:
+        pass
+    return pvc, fofo
 
-def j_fair_whipple_hsiao(Q_Ls, D_mm):
-    # Provided form, already for Q in L/s and D in mm ; J in m/m
-    Q = max(0.0, _num(Q_Ls, 0.0))
-    D = max(0.0, _num(D_mm, 0.0))
-    if D <= 0.0: return 0.0
-    return 20.2e6 * (Q ** 1.88) / (D ** 4.88)
+def get_dn_series(table):
+    if table.empty:
+        return None, None
+    for nm in table.columns:
+        low = nm.lower()
+        if ('de' in low or 'dn' in low or 'diam' in low) and 'mm' in low:
+            return table[nm], nm
+    return table.iloc[:, 0], table.columns[0]
 
-# ----------------- App -----------------
-st.set_page_config(page_title='SPAF – kPa + HW/FWH + L_eq por DN ref. + P(A)', layout='wide')
-st.title('Dimensionamento – Barrilete e Colunas (kPa • Hazen-Williams / Fair-Whipple-Hsiao • Nível do Reservatório)')
+def piece_columns_for(table):
+    if table.empty:
+        return [], None
+    dn_series, dn_name = get_dn_series(table)
+    cols = [c for c in table.columns if c not in (dn_name, 'dref_pol')]
+    return cols, dn_name
 
-pvc_table, fofo_table = load_tables()
+def lookup_row_by_mm(table, ref_mm):
+    if table.empty:
+        return pd.Series(dtype=float), float(ref_mm or 0), ''
+    dn_series, dn_name = get_dn_series(table)
+    try: x = float(ref_mm)
+    except Exception: x = 0.0
+    idx = (dn_series - x).abs().idxmin()
+    row = table.loc[idx]
+    de_ref_mm = float(row.get(dn_name, 0) or 0)
+    pol_ref = _s(row.get('dref_pol')) if 'dref_pol' in table.columns else ''
+    return row, de_ref_mm, pol_ref
 
-BASE_COLS = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m','p_min_ref_kPa']
-DTYPES = {'id':'string','ramo':'string','ordem':'Int64','de_no':'string','para_no':'string',
-          'dn_mm':'float','de_ref_mm':'float','pol_ref':'string',
-          'comp_real_m':'float','dz_io_m':'float','peso_trecho':'float','leq_m':'float','p_min_ref_kPa':'float'}
+def pretty(name: str):
+    name = (name or '').strip().replace('_', ' ')
+    name = name.replace(' de ', ' DE ').replace(' mm', ' (mm)')
+    return name
 
+# =========================
+# App
+# =========================
+
+st.set_page_config(page_title='SPAF – Regras de Trechos (ramais, Tês, cruzetas)', layout='wide')
+st.title('SPAF – Barriletes e Colunas • Regras de Trechos (ramais, Tê, Cruzeta, Entrada)')
+st.caption(VERSION_STAMP)
+
+pvc_table, fofo_table = safe_load_tables()
+_ensure_session_df()
+
+# Sidebar
 with st.sidebar:
     st.header('Parâmetros Globais')
     projeto_nome = st.text_input('Nome do Projeto', 'Projeto Genérico')
     material_sistema = st.selectbox('Material do Sistema', ['(selecione)','PVC','FoFo'], index=0)
-    modelo_perda = st.radio('Modelo de perda contínua', ['Hazen-Williams','Fair-Whipple-Hsiao'], index=0)
-    # UC -> Q provável
-    k_uc  = st.number_input('k (Q = k·Peso^exp)', value=0.30, step=0.05, format='%.2f')
-    exp_uc = st.number_input('exp (Q = k·Peso^exp)', value=0.50, step=0.05, format='%.2f')
-    # Coeficientes C por material (HW)
-    c_pvc = st.number_input('C (PVC)', value=150.0, step=5.0)
-    c_fofo = st.number_input('C (Ferro Fundido)', value=130.0, step=5.0)
-    # Reservatório: Hmax / Hmin e nível de operação
-    st.markdown('**Nível do Reservatório (m)**')
-    H_max = st.number_input("H_max (espelho d'água no nível cheio)", value=25.0, step=0.5)
-    H_min = st.number_input('H_min (mínimo com água no ponto)', value=0.0, step=0.5)
-    frac = st.slider('Nível operacional (0 = H_min, 1 = H_max)', 0.0, 1.0, value=1.0)
-    H_res = H_min + frac * (H_max - H_min)
-    st.metric('p_in em A (kPa)', f'{H_res * KPA_PER_M:,.2f}')
 
-if 'trechos' not in st.session_state:
-    empty = {c: pd.Series(dtype=t) for c,t in DTYPES.items()}
-    st.session_state['trechos'] = pd.DataFrame(empty)
+    st.markdown('---')
+    st.subheader('Modelo de perda contínua')
+    modelo_perda = st.radio('Escolha o modelo', ['Hazen-Williams','Fair-Whipple-Hsiao'], index=0)
 
-tab1, tab2, tab3 = st.tabs(['1) Trechos','2) L_eq (por trecho)','3) Resultados & Exportar'])
+    st.markdown('---')
+    st.subheader('Conversão de Peso (UC) → Vazão')
+    st.caption('Q = k · Peso^exp')
+    k_val  = st.number_input('k (Q = k·Peso^exp)',    min_value=0.0, step=0.01, value=0.30, format='%.2f')
+    exp_val= st.number_input('exp (Q = k·Peso^exp)',  min_value=0.0, step=0.05, value=0.50, format='%.2f')
 
-# TAB 1 — cadastro
+    if modelo_perda == 'Hazen-Williams':
+        st.markdown('---')
+        st.subheader('Coeficientes Hazen-Williams')
+        c_pvc  = st.number_input('C (PVC)',           min_value=1.0, step=1.0, value=150.0, format='%.0f')
+        c_fofo = st.number_input('C (Ferro Fundido)', min_value=1.0, step=1.0, value=130.0, format='%.0f')
+    else:
+        c_pvc, c_fofo = None, None
+
+    st.markdown('---')
+    st.subheader('Nível do Reservatório (m)')
+    h_max = st.number_input("H_max (espelho d'água no nível cheio)", value=25.00, step=0.25, format='%.2f')
+    h_min = st.number_input('H_min (mínimo com água no ponto)',      value=0.00, step=0.25, format='%.2f')
+    nivel_operacional = st.slider('Nível operacional (0 = H_min, 1 = H_max)', min_value=0.0, max_value=1.0, value=1.00, step=0.01)
+    h_oper = h_min + nivel_operacional * (h_max - h_min)
+
+    st.markdown('---')
+    st.subheader('Notação dos nós (início/fim)')
+    notacao_mode = st.radio('Modo de notação', ['Letras (A, B, ..., Z, AA, AB, ...)', 'Números (1, 2, 3, ...)'], index=0)
+    st.caption('A validação do app garante que os nós respeitem o modo escolhido.')
+
+    st.markdown('---')
+    st.caption('Regras FÍSICAS FIXAS: Entrada=1 saída; Tê=2 saídas; Cruzeta=3 saídas.')
+
+tab1, tab2, tab3 = st.tabs(['Trechos', 'L_eq por DN (referencial)', 'Resultados'])
+
+# ---------------- TAB 1: Cadastro ----------------
 with tab1:
-    st.subheader('Cadastro de Trechos (DN interno informado; DN **referencial** vem do material)')
-    if material_sistema == '(selecione)':
-        st.warning('Escolha o **Material do Sistema** na barra lateral para habilitar.')
-    with st.form('form_add', clear_on_submit=True):
+    st.subheader('Cadastrar trechos')
+    with st.form('frm_add'):
+        # Linha 1 – identificação
         c1,c2,c3 = st.columns([1.2,1,1])
         id_val = c1.text_input('id (opcional)')
         ramo = c2.text_input('ramo', value='A')
         ordem = c3.number_input('ordem', min_value=1, step=1, value=1)
-        c4,c5 = st.columns(2)
-        de_no = c4.text_input('de_no', value='A')
-        para_no = c5.text_input('para_no', value='B')
-        c6,c7,c8 = st.columns(3)
-        dn_mm = c6.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
-        comp_real_m = c7.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
-        dz_io_m = c8.number_input(
-        "dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)",
-        step=0.1, value=0.0, format="%.2f"
-        )
 
-        peso_trecho = st.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
-        c9,c10 = st.columns([1,1])
-        tipo_ponto = c9.selectbox('Tipo do ponto no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
-        p_min_ref_kPa = c10.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5, value=(5.0 if 'Sem' in tipo_ponto else 10.0), format='%.2f')
+        # Linha exclusiva — tipo da conexão no início
+        st.markdown('### Tipo da conexão no INÍCIO')
+        tipo_ini = st.selectbox('Escolha o tipo do ponto inicial:', ['Entrada de Água','Tê','Cruzeta'], key='tipo_ini_fullwidth')
+
+        # Linha 2 – início e fim
+        c5, c6 = st.columns([1, 1])
+        de_no_default   = 'A' if notacao_mode.startswith('Let') else '1'
+        para_no_default = 'B' if notacao_mode.startswith('Let') else '2'
+        de_no_raw   = c5.text_input('de_no (início)', value=de_no_default)
+        para_no_raw = c6.text_input('para_no (fim)',  value=para_no_default)
+
+        # Linha 3 – DN, comprimento, desnível
+        c7,c8,c9 = st.columns(3)
+        dn_mm = c7.number_input('dn_mm (mm, interno)', min_value=0.0, step=1.0, value=32.0)
+        comp_real_m = c8.number_input('comp_real_m (m)', min_value=0.0, step=0.1, value=6.0, format='%.2f')
+        dz_io_m = c9.number_input("dz_io_m (m) (z_inicial - z_final; desce>0, sobe<0)", step=0.1, value=0.0, format="%.2f")
+
+        # Linha 4 – peso e ponto final (mín. de pressão)
+        c10,c11 = st.columns([1,1])
+        peso_trecho = c10.number_input('peso_trecho (UC)', min_value=0.0, step=1.0, value=10.0, format='%.2f')
+        tipo_ponto = c11.selectbox('Tipo no final do trecho', ['Sem utilização (5 kPa)','Ponto de utilização (10 kPa)'])
+        p_min_ref_kPa = st.number_input('p_min_ref (kPa)', min_value=0.0, step=0.5,
+                                        value=(5.0 if 'Sem' in tipo_ponto else 10.0), format='%.2f')
+
         ok = st.form_submit_button("➕ Adicionar trecho", disabled=(material_sistema == "(selecione)"))
-    
 
-    if ok:
-        mat_key = 'FoFo' if isinstance(material_sistema,str) and material_sistema.strip().lower()=='fofo' else 'PVC'
-        table_mat = pvc_table if mat_key=='PVC' else fofo_table
-        st.caption(f'Tabela L_eq em uso: **{mat_key}**')
-        _row, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
-        base = pd.DataFrame(st.session_state['trechos']).reindex(columns=BASE_COLS).copy()
-        nova = {'id':id_val,'ramo':ramo,'ordem':int(ordem),'de_no':de_no,'para_no':para_no,
+        if ok:
+            # 1) Notação
+            try:
+                de_no = normalize_label(de_no_raw, notacao_mode)
+                para_no = normalize_label(para_no_raw, notacao_mode)
+            except ValueError as e:
+                st.error(f'Erro na notação dos nós: {e}')
+                st.stop()
+            if de_no == para_no:
+                st.error('Início e fim do trecho não podem ser iguais.')
+                st.stop()
+
+            # 2) Duplicidade global (de_no + para_no) — independente do ramo
+            df = pd.DataFrame(st.session_state['trechos']).copy()
+            if not df.empty and {'de_no','para_no'} <= set(df.columns):
+                dup = df[(df['de_no'].astype(str)==de_no) & (df['para_no'].astype(str)==para_no)]
+                if not dup.empty:
+                    st.error(f'Já existe um trecho {de_no} → {para_no}.')
+                    st.stop()
+
+            # 3) Regras FÍSICAS FIXAS de saídas por nó de início + consistência do tipo
+            cap_map = {'entrada': 1, 'te': 2, 'cruzeta': 3}
+            tipo_sel_norm = _norm_tipo(tipo_ini)
+
+            count_out = 0
+            if not df.empty and {'de_no','tipo_ini'} <= set(df.columns):
+                subset = df[df['de_no'].astype(str)==de_no]
+                if not subset.empty:
+                    tipos_exist_norm = set(_norm_tipo(x) for x in subset['tipo_ini'].tolist())
+                    if len(tipos_exist_norm) > 1 and tipo_sel_norm not in tipos_exist_norm:
+                        st.error('O nó de início já foi cadastrado com tipos diferentes. Padronize o tipo.')
+                        st.stop()
+                    if len(tipos_exist_norm) == 1 and tipo_sel_norm not in tipos_exist_norm:
+                        st.error(f'O nó "{de_no}" já está definido como "{list(subset["tipo_ini"].unique())[0]}".')
+                        st.stop()
+                    count_out = len(subset)
+
+            cap_allowed = cap_map.get(tipo_sel_norm, 2)
+            if count_out >= cap_allowed:
+                st.error(f'O nó de início "{de_no}" ({tipo_ini}) já atingiu o limite de {cap_allowed} saída(s).')
+                st.stop()
+
+            # 4) Monta nova linha (ID único)
+            base_exist = pd.DataFrame(st.session_state['trechos'])
+            existing_ids = set(
+                base_exist.get('id', pd.Series([], dtype=str)).astype(str).fillna('').str.strip().tolist()
+            )
+            raw_id = (id_val or '').strip()
+            if (not raw_id) or (raw_id in existing_ids):
+                base_tag = raw_id if raw_id else 'row'
+                raw_id = f"{base_tag}_{uuid.uuid4().hex[:6]}"
+
+            # L_eq de referência (se tabelas existirem)
+            table_mat = pvc_table if (str(material_sistema).strip().lower()=='pvc') else fofo_table
+            _, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, dn_mm)
+
+            nova = {
+                'id': raw_id,'ramo':ramo,'ordem':int(ordem),'tipo_ini':tipo_ini,
+                'de_no':de_no,'para_no':para_no,
                 'dn_mm':float(dn_mm),'de_ref_mm':float(de_ref_mm),'pol_ref':pol_ref,
                 'comp_real_m':float(comp_real_m),'dz_io_m':float(dz_io_m),
-                'peso_trecho':float(peso_trecho),'leq_m':0.0,'p_min_ref_kPa':float(p_min_ref_kPa)}
-        base = pd.concat([base, pd.DataFrame([nova])], ignore_index=True)
-        for c,t in DTYPES.items():
-            try: base[c] = base[c].astype(t)
-            except Exception: pass
-        st.session_state['trechos'] = base
-        st.success('Trecho adicionado! DN referencial (nominal/externo) e "Dref Pol" preenchidos.')
-    vis = pd.DataFrame(st.session_state['trechos']).reindex(columns=[c for c in BASE_COLS if c!='leq_m'])
-    st.dataframe(vis, use_container_width=True, height=320)
+                'peso_trecho':float(peso_trecho),'leq_m':0.0,'p_min_ref_kPa':float(p_min_ref_kPa)
+            }
 
-# ============================
-# Painel de gerenciamento de trechos (excluir / mover)
-# ============================
+            base = pd.concat([df, pd.DataFrame([nova])], ignore_index=True)
+            for c,t in DTYPES.items():
+                try: base[c] = base[c].astype(t)
+                except Exception: pass
+            st.session_state['trechos'] = base[BASE_COLS]
+            st.success(f'Trecho adicionado: {ramo}: {de_no} → {para_no} ({tipo_ini}).')
 
+    vis_cols = [c for c in BASE_COLS if c!='leq_m']
+    st.dataframe(pd.DataFrame(st.session_state['trechos'])[vis_cols], use_container_width=True, height=360)
+
+# ---------------- Gerenciar trechos ----------------
 st.subheader('Gerenciar trechos')
-import pandas as pd
 
 def _move_row_action(row_id, ramo_val, direction):
     df = pd.DataFrame(st.session_state.get('trechos', pd.DataFrame()))
     if df.empty or 'ramo' not in df.columns or 'ordem' not in df.columns:
         return
     if 'id' not in df.columns:
-        # fallback: attach a synthetic id based on current order
         df = df.reset_index().rename(columns={'index':'id'})
     sub = df[df['ramo']==ramo_val].sort_values('ordem', kind='stable')
     ids = sub['id'].tolist()
@@ -222,49 +348,49 @@ def _move_row_action(row_id, ramo_val, direction):
         ids[i-1], ids[i] = ids[i], ids[i-1]
     elif direction == 'down' and i < len(ids)-1:
         ids[i], ids[i+1] = ids[i+1], ids[i]
-    # reatribui 'ordem' sequencial dentro do ramo
+    sub = sub.set_index('id').loc[ids].reset_index()
+    sub['ordem'] = range(1, len(sub)+1)
+    df.loc[df['ramo']==ramo_val, 'ordem'] = None
+    for _, r in sub.iterrows():
+        df.loc[(df['ramo']==ramo_val) & (df['id']==r['id']), 'ordem'] = r['ordem']
     for k, rid in enumerate(ids, start=1):
         df.loc[df['id']==rid, 'ordem'] = k
-    st.session_state['trechos'] = df
-    if hasattr(st, 'rerun'):
-        st.rerun()
-    else:
-        st.experimental_rerun()
+    st.session_state['trechos'] = df[BASE_COLS]
+    _st_rerun()
 
 def _delete_row_action(row_id, ramo_val):
     df = pd.DataFrame(st.session_state.get('trechos', pd.DataFrame()))
-    if df.empty:
-        return
+    if df.empty: return
     if 'id' not in df.columns:
         df = df.reset_index().rename(columns={'index':'id'})
     df = df[df['id'] != row_id].reset_index(drop=True)
     if 'ramo' in df.columns and 'ordem' in df.columns:
-        for r in df['ramo'].dropna().unique().tolist():
-            mask = df['ramo']==r
-            order_ids = df.loc[mask].sort_values('ordem', kind='stable')['id'].tolist()
-            for k, rid in enumerate(order_ids, start=1):
-                df.loc[df['id']==rid, 'ordem'] = k
-    st.session_state['trechos'] = df
-    if hasattr(st, 'rerun'):
-        st.rerun()
-    else:
-        st.experimental_rerun()
+        for rv in df['ramo'].dropna().unique().tolist():
+            sub = df[df['ramo']==rv].sort_values('ordem', kind='stable').copy()
+            sub['ordem'] = range(1, len(sub)+1)
+            df.loc[df['ramo']==rv, 'ordem'] = None
+            for _, r in sub.iterrows():
+                df.loc[(df['ramo']==rv) & (df['id']==r['id']), 'ordem'] = r['ordem']
+    st.session_state['trechos'] = df[BASE_COLS]
+    _st_rerun()
 
-if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.DataFrame) and not st.session_state['trechos'].empty:
-    tman = st.session_state['trechos'].copy()
-    if 'ramo' in tman.columns and 'ordem' in tman.columns:
-        tman = tman.sort_values(['ramo','ordem'], kind='stable').reset_index(drop=True)
+df_view = pd.DataFrame(st.session_state.get('trechos', pd.DataFrame()))
+if not df_view.empty:
+    if 'ramo' in df_view.columns and 'ordem' in df_view.columns:
+        tman = df_view.sort_values(['ramo','ordem'], kind='stable').reset_index(drop=True)
     else:
-        tman = tman.reset_index(drop=True)
+        tman = df_view.reset_index(drop=True)
+
     r_opt = ['Todos'] + (sorted([str(x) for x in tman['ramo'].dropna().unique().tolist()]) if 'ramo' in tman.columns else [])
     ramo_sel = st.selectbox('Filtrar por ramo', r_opt or ['Todos'], key='manage_ramo_sel')
+
     if ramo_sel != 'Todos' and 'ramo' in tman.columns:
         tview = tman[tman['ramo'].astype(str)==ramo_sel].reset_index(drop=True)
     else:
         tview = tman.copy()
 
-    default_cols = [c for c in ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho'] if c in tview.columns]
-    show_cols = default_cols
+    show_cols = [c for c in ['id','ramo','ordem','tipo_ini','de_no','para_no',
+                             'dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m','peso_trecho'] if c in tview.columns]
 
     st.caption('Use os botões no final de cada linha para reordenar (↑, ↓) ou excluir (🗑).')
     head = st.columns([*([1]*len(show_cols)), 1.2], gap='small')
@@ -272,20 +398,22 @@ if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.
         c.markdown(f"**{name}**")
     head[-1].markdown("**Ações**")
 
-    for i, row in tview.reset_index(drop=True).iterrows():
+    tv = tview.reset_index(drop=True)
+    for i, row in tv.iterrows():
         row_cols = st.columns([*([1]*len(show_cols)), 1.2], gap='small')
         for c, name in zip(row_cols[:-1], show_cols):
             c.markdown(f"{row.get(name, '')}")
         with row_cols[-1]:
             a1, a2, a3 = st.columns(3, gap='small')
+            rid = str(row.get('id', '')).strip() or f"row_{i}"
+            ramo_val = row.get('ramo', 'R')
+            rid_key = f"{rid}_{ramo_val}_{i}"
             with a1:
-                up = st.button("↑", key=f"mgr_up_{row.get('id', i)}", help="Mover para cima", disabled=(i==0))
+                up = st.button("↑", key=f"mgr_up_{rid_key}", help="Mover para cima", disabled=(i==0))
             with a2:
-                down = st.button("↓", key=f"mgr_down_{row.get('id', i)}", help="Mover para baixo", disabled=(i==len(tview)-1))
+                down = st.button("↓", key=f"mgr_down_{rid_key}", help="Mover para baixo", disabled=(i==len(tv)-1))
             with a3:
-                delete = st.button("🗑", key=f"mgr_del_{row.get('id', i)}", help="Excluir esta linha")
-        rid = row.get('id', i)
-        ramo_val = row.get('ramo', None)
+                delete = st.button("🗑", key=f"mgr_del_{rid_key}", help="Excluir esta linha")
         if up:
             _move_row_action(rid, ramo_val, 'up')
         if down:
@@ -294,7 +422,8 @@ if 'trechos' in st.session_state and isinstance(st.session_state['trechos'], pd.
             _delete_row_action(rid, ramo_val)
 else:
     st.info('Nenhum trecho cadastrado ainda.')
-# TAB 2 — L_eq por trecho (baseado no DN referencial)
+
+# ---------------- TAB 2: L_eq (referencial) ----------------
 with tab2:
     st.subheader('Comprimento Equivalente — editar por trecho (baseado no DN **referencial**)')
     base = pd.DataFrame(st.session_state['trechos'])
@@ -303,89 +432,85 @@ with tab2:
     elif material_sistema == '(selecione)':
         st.warning('Selecione o Material do Sistema na barra lateral.')
     else:
-        mat_key = 'FoFo' if isinstance(material_sistema,str) and material_sistema.strip().lower()=='fofo' else 'PVC'
-        table_mat = pvc_table if mat_key=='PVC' else fofo_table
-        st.caption(f'Tabela L_eq em uso: **{mat_key}**')
+        table_mat = pvc_table if (str(material_sistema).strip().lower()=='pvc') else fofo_table
         piece_cols, dn_name = piece_columns_for(table_mat)
-        base = base.copy()
-        base['label'] = base.apply(trecho_label, axis=1)
-        sel = st.selectbox('Selecione o trecho para preencher quantidades', base['label'].tolist())
-        r = base[base['label']==sel].iloc[0]
-        dn_ref = r.get('dn_mm')
-        eql_row, _, _ = lookup_row_by_mm(table_mat, dn_ref)
-        display_labels = [pretty(c) for c in piece_cols]
-        df = pd.DataFrame({
-            'Conexão/Peça': display_labels,
-            '(m)': [ _num(eql_row.get(c, 0.0), 0.0) for c in piece_cols ],
-            '(Qt.)': [0]*len(piece_cols),
-        }).set_index('Conexão/Peça')
-        edited = st.data_editor(
-            df,
-            use_container_width=True,
-            num_rows='fixed',
-            column_config={
-                '(m)': st.column_config.NumberColumn(disabled=True, format='%.2f'),
-                '(Qt.)': st.column_config.NumberColumn(min_value=0, step=1)
-            },
-            key=f'eq_editor_{mat_key}_{sel}'
-        )
-        if st.button('Aplicar L_eq ao trecho selecionado'):
-            dfe = pd.DataFrame(edited)
-            L = float((dfe['(m)'] * dfe['(Qt.)']).fillna(0).sum())
-            base2 = pd.DataFrame(st.session_state['trechos']).copy()
-            idx = base2[base2.apply(trecho_label, axis=1)==sel].index
-            if len(idx)>0:
-                base2.loc[idx[0], 'leq_m'] = L
-                st.session_state['trechos'] = base2
-                st.success(f'L_eq aplicado ao trecho {sel}: {L:.2f} m')
-            st.metric('L_eq do trecho (m)', f'{L:.2f}')
+        sel = st.selectbox('Selecione o trecho', [trecho_label(r) for _, r in base.iterrows()])
+        if sel:
+            idx_sel = None
+            for idx, r in base.iterrows():
+                if trecho_label(r) == sel:
+                    idx_sel = idx
+                    break
+            if idx_sel is not None:
+                eql_row, de_ref_mm, pol_ref = lookup_row_by_mm(table_mat, base.loc[idx_sel, 'dn_mm'])
+                if piece_cols:
+                    display_labels = [pretty(c) for c in piece_cols]
+                    df = pd.DataFrame({
+                        'Conexão/Peça': display_labels,
+                        '(m)': [ _num(eql_row.get(c, 0.0), 0.0) for c in piece_cols ],
+                        '(Qt.)': [0]*len(piece_cols),
+                    }).set_index('Conexão/Peça')
+                else:
+                    df = pd.DataFrame({'Conexão/Peça': [], '(m)': [], '(Qt.)': []}).set_index('Conexão/Peça')
+                edited = st.data_editor(
+                    df,
+                    use_container_width=True,
+                    num_rows='fixed',
+                    column_config={
+                        '(m)': st.column_config.NumberColumn(disabled=True, format='%.2f'),
+                        '(Qt.)': st.column_config.NumberColumn(min_value=0, step=1)
+                    },
+                    key=f'eq_editor_{idx_sel}'
+                )
+                leq_total = float((edited['(m)'] * edited['(Qt.)']).sum()) if not edited.empty else 0.0
+                st.session_state['trechos'].loc[idx_sel, 'leq_m'] = leq_total
+                st.success(f'L_eq total para o trecho selecionado: {leq_total:.2f} m')
 
-# TAB 3 — resultados (kPa) com J em kPa/m e propagação P_in -> P_out
+# ---------------- TAB 3: Resultados ----------------
 with tab3:
     st.subheader('Resultados (kPa) — com J em kPa/m e pressão inicial no ponto A')
-    st.caption('Fórmula: **p_out = p_in + γ·(z_i − z_f) − h_f^cont − h_f^loc**; γ = 9,80665 kPa/m')
-    t3 = pd.DataFrame(st.session_state.get('trechos', {}))
-    if t3.empty:
+    st.caption('Fórmula: p_out = p_in + γ·(z_inicial − z_final) − h_f_cont − h_f_loc, onde γ = 9,80665 kPa/m')
+    base = pd.DataFrame(st.session_state['trechos']).copy()
+    if base.empty:
         st.info('Cadastre trechos e atribua L_eq na aba 2.')
     else:
-        t3 = t3.copy()
-        # Q provável (L/s)
-        t3['Q (L/s)'] = (k_uc * (t3['peso_trecho'] ** exp_uc)).astype(float)
+        # 1) Vazão provável (L/s) a partir do Peso (UC)
+        base['Q (L/s)'] = (k_val * (base['peso_trecho'] ** exp_val)).astype(float)
 
-        # Gradiente J (kPa/m) e J (m/m)
+        # 2) Gradiente J (kPa/m) e (m/m)
         def _J_kPa(rr):
             if modelo_perda == 'Hazen-Williams':
-                C = c_pvc if material_sistema=='PVC' else c_fofo
+                C = c_pvc if material_sistema == 'PVC' else c_fofo
                 j_mm = j_hazen_williams(rr['Q (L/s)'], rr['dn_mm'], C)  # m/m
                 return j_mm * KPA_PER_M
             else:
                 return j_fair_whipple_hsiao_kPa_per_m(rr['Q (L/s)'], rr['dn_mm'], material_sistema)
-        t3['J (kPa/m)'] = t3.apply(_J_kPa, axis=1)
-        t3['J (m/m)']   = t3['J (kPa/m)'] / KPA_PER_M
 
-        # Velocidade v (m/s)
-        import math
+        base['J (kPa/m)'] = base.apply(_J_kPa, axis=1)
+        base['J (m/m)']   = base['J (kPa/m)'] / KPA_PER_M
+
+        # 3) Velocidade v (m/s)
         def _vel(rr):
             Q = max(0.0, _num(rr['Q (L/s)'],0.0)) / 1000.0
             D = max(0.0, _num(rr['dn_mm'],0.0)) / 1000.0
             if D <= 0 or Q <= 0: return 0.0
             A = math.pi * (D**2) / 4.0
             return Q / A
-        t3['v (m/s)'] = t3.apply(_vel, axis=1)
+        base['v (m/s)'] = base.apply(_vel, axis=1)
 
-        # Opção de ordenação (padrão = manter a ordem de cadastro dos trechos)
-        ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False, help='Quando desligado, os resultados seguem a mesma ordem mostrada em "Trechos".')
-        if ordenar:
-            t3 = t3.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
+        # 4) Ordenação opcional
+        ordenar = st.checkbox('Ordenar por ramo/ordem (ascendente)', value=False)
+        if ordenar and {'ramo','ordem'} <= set(base.columns):
+            base = base.sort_values(by=['ramo','ordem'], kind='mergesort', na_position='last').reset_index(drop=True)
 
-        # Propagação por ramo: p_in -> perdas -> p_out
-        results = []
-        for ramo, grp in t3.groupby('ramo', sort=False):
-            p_in = H_res * KPA_PER_M  # pressão inicial do ramo (ponto A)
+        # 5) Propagação p_in -> p_out por ramo, partindo de p_in = H_oper * γ
+        resultados = []
+        for ramo_val, grp in base.groupby('ramo', sort=False):
+            p_in = h_oper * KPA_PER_M
             for _, r in grp.iterrows():
                 J_kPa_m = _num(r['J (kPa/m)'])
                 hf_cont = J_kPa_m * _num(r['comp_real_m'])
-                hf_loc  = J_kPa_m * _num(r['leq_m'])
+                hf_loc  = J_kPa_m * _num(r.get('leq_m', 0.0))
                 p_disp  = KPA_PER_M * _num(r.get('dz_io_m', 0.0))
                 p_out   = p_in + p_disp - hf_cont - hf_loc
                 row = r.to_dict()
@@ -396,20 +521,34 @@ with tab3:
                     'p_disp (kPa)': p_disp,
                     'p_out (kPa)': p_out,
                 })
-                results.append(row)
+                resultados.append(row)
                 p_in = p_out
-        t_out = pd.DataFrame(results)
 
-        show_cols = ['id','ramo','ordem','de_no','para_no','dn_mm','de_ref_mm','pol_ref','comp_real_m','dz_io_m',
-                     'peso_trecho','leq_m','Q (L/s)','v (m/s)','J (kPa/m)',
-                     'p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','p_disp (kPa)','p_out (kPa)']
+        t_out = pd.DataFrame(resultados)
+
+        # 6) Colunas para exibir (inclui tipo_ini se existir)
+        base_cols_show = [
+            'id','ramo','ordem','tipo_ini','de_no','para_no','dn_mm','de_ref_mm',
+            'pol_ref','comp_real_m','dz_io_m','peso_trecho','leq_m',
+            'Q (L/s)','v (m/s)','J (kPa/m)','p_in (kPa)','hf_cont (kPa)','hf_loc (kPa)','p_disp (kPa)','p_out (kPa)'
+        ]
+        show_cols = [c for c in base_cols_show if c in t_out.columns]
         st.dataframe(t_out[show_cols], use_container_width=True, height=520)
 
-        # Export JSON
-        params = {'projeto': projeto_nome, 'material': material_sistema, 'modelo_perda': modelo_perda,
-                  'k_uc': k_uc, 'exp_uc': exp_uc, 'C_PVC': c_pvc, 'C_FoFo': c_fofo,
-                  'H_max_m': H_max, 'H_min_m': H_min, 'H_op_m': H_res, 'KPA_PER_M': KPA_PER_M}
+        # 7) Export JSON (parâmetros + resultados)
+        params = {
+            'projeto': projeto_nome,
+            'material': material_sistema,
+            'modelo_perda': modelo_perda,
+            'Q_from_Peso': {'k': k_val, 'exp': exp_val},
+            'HW': ({'C_PVC': c_pvc, 'C_FoFo': c_fofo} if modelo_perda == 'Hazen-Williams' else None),
+            'reservatorio_m': {'H_max': h_max, 'H_min': h_min, 'nivel_operacional': nivel_operacional, 'H_oper': h_oper},
+            'notacao': notacao_mode,
+            'regras_fixas': {'entrada': 1, 'te': 2, 'cruzeta': 3},
+            'KPA_PER_M': KPA_PER_M
+        }
         proj = {'params': params, 'trechos': t_out[show_cols].to_dict(orient='list')}
         st.download_button('Baixar projeto (.json)',
                            data=json.dumps(proj, ensure_ascii=False, indent=2).encode('utf-8'),
                            file_name='spaf_projeto.json', mime='application/json')
+
